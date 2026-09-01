@@ -1,0 +1,6 @@
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+SQLAlchemy>=2.0,<3.0
+pydantic>=2.7,<3.0
+httpx2>=0.28  # starlette>=1.0 的 TestClient 依赖（smoke_test 冒烟测试用）
+openpyxl>=3.1  # 份额管理 Excel 导入

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.db
+*.db.bak-*
+*.sqlite3
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+*.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# AI 助手记忆/会话数据（不进版本库）
+.workbuddy/
+.codebuddy/
+
+# Project-local runtimes（体积大，不进 git；内网迁移需随目录整体拷贝）
+runtime/
+
+# 临时日志/报告
+_*.log
+size_report.txt
