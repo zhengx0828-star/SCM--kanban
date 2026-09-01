@@ -12,6 +12,8 @@ venv/
 node_modules/
 dist/
 *.local
+# Vite 构建临时文件
+vite.config.ts.timestamp-*.mjs
 
 # Editor / OS
 .vscode/

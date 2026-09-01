@@ -16,7 +16,7 @@
 | 供需管理 | `/supply-demand` | 项目级客户需求（1-12 月）、供应商产能、BOM 用量系数、供需平衡分析 |
 | 项目供需明细 | `/supply-demand/projects/:projectId` | 项目下的供应明细、关联物料/供应商，录入需求 / 产能 / BOM 系数 |
 | 份额管理 | `/share` | 项目维度份额概览：KPI 卡 + 风险排行 + 份额×评分四象限 + 月末结转 |
-| 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入 + 行内编辑 |
+| 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（含基地配额列）+ 行内编辑 + 基地拉线配置（动态基地列） |
 | 主数据 | `/materials` | 供应商 / 物料 / 供应关系 / 项目 统一管理页（含地图点位、风险等级） |
 | 规则手册 | `/rules` | 项目 SOP 手册：业务规则与数据口径，按 module 分组 |
 
@@ -38,11 +38,11 @@
 - React Hook Form + Zod 表单校验
 - ECharts 6（图表 + 中国地图）、next-themes（明暗主题）、sonner（toast）
 
-**数据库模型（三层六表，核心业务模型）**
+**数据库模型（三层七表，核心业务模型）**
 - L1 主数据：`projects` / `materials`（PN 唯一）/ `suppliers`（含 `risk_level` 地图风险等级，红/黄/绿/NULL=未评估）
 - L2 供应关系：`supply_relations`（material × supplier 唯一，四元组）
 - L3 项目明细：`project_supply_relations`（UNIQUE(project, supply_relation)，模块扩展字段）
-- L3 份额管理：`share_records`（UNIQUE(project, supply_relation, month)，按月快照）
+- L3 份额管理：`share_records`（UNIQUE(project, supply_relation, month)，按月快照）+ `share_base_configs`（项目 × 月 基地拉线配置，UNIQUE(project, month)）
 
 > 另有 `products`（历史遗留的通用 CRUD）与 `rules`（SOP 规则手册）两张辅助表。
 
@@ -439,7 +439,9 @@ scm-kanban/
 | GET | `/api/share/records` | 份额明细列表（支持 keyword 搜索） |
 | POST | `/api/share/records` | 手动新增份额记录 |
 | PUT | `/api/share/records/{id}` | 手动修改（自动重算，标记手改） |
-| POST | `/api/share/import` | Excel 导入份额数据（openpyxl） |
+| GET | `/api/share/base-config` | 项目 × 月 基地拉线配置 |
+| PUT | `/api/share/base-config` | 保存基地配置（自动重算未手改份额 = Σ(配额×拉线数)÷Σ拉线数） |
+| POST | `/api/share/import` | Excel 导入份额数据（openpyxl，支持基地配额列） |
 | POST | `/api/share/rollover` | 月末结转：本月 → 下月空档 |
 
 **规则 rules**

@@ -260,6 +260,28 @@ class ShareRecord(Base):
     supply_relation: Mapped[SupplyRelation] = relationship(back_populates="share_records")
 
 
+class ShareBaseConfig(Base):
+    """份额管理：项目 × 月 的基地拉线配置（公共，全物料共用）。
+
+    拉线数量是「基地」的属性：同项目同月所有供应商共用同一组基地拉线数，
+    作为本月系统份额的加权权重（份额 = Σ(基地份额 × 拉线数) ÷ Σ拉线数）。
+    保存后后端自动重算该项目该月所有「未手改覆盖」记录的份额。
+    UNIQUE(project_id, month)：每月一套配置；基地 1-4 个动态维护。
+    """
+
+    __tablename__ = "share_base_configs"
+    __table_args__ = (UniqueConstraint("project_id", "month", name="uq_share_base_config_project_month"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True, comment="所属项目")
+    month: Mapped[str] = mapped_column(String(7), nullable=False, index=True, comment="月份（YYYY-MM）")
+    bases: Mapped[str] = mapped_column(Text, nullable=False, comment="基地配置 JSON：[{base, lines}]（1-4 个）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    project: Mapped[Project] = relationship()
+
+
 class Rule(Base):
     """规则条目：各模块的 SOP、导入规则、注意事项等。
 

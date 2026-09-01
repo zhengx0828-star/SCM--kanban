@@ -10,7 +10,7 @@
 - 独供 = 同项目同物料仅 1 家供应商（自动推导）
 - 份额波动预警：|本月系统份额 − 上期份额| ≥ 30 个百分点
 - 建议偏差预警：|本月系统份额 − 上月建议配额| > 5 个百分点
-- 多基地份额 = Σ(各基地拉线数量 × 基地份额) ÷ 基地数（1-4 个基地动态）
+- 多基地份额 = Σ(基地份额 × 拉线数量) ÷ Σ拉线数（拉线数相等时等价于 ÷ 基地数；1-4 个基地动态）
 
 接口：
 - GET    /api/share/projects                   有份额数据的项目列表
@@ -20,6 +20,8 @@
 - GET    /api/share/records?project_id=&month=&keyword= 明细列表
 - POST   /api/share/records                       手动新增记录
 - PUT    /api/share/records/{id}                 手动修改（重算 + 标记 edited_manually）
+- GET    /api/share/base-config?project_id=&month= 项目×月 基地拉线配置
+- PUT    /api/share/base-config                  保存基地配置（重算未手改份额）
 - POST   /api/share/import                        Excel 导入（openpyxl，校验合法性）
 - POST   /api/share/rollover?from=&to=           月末结转：本月→上月、建议→quota_prev
 """
@@ -33,12 +35,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
-from ..models import Material, Project, ShareRecord, Supplier, SupplyRelation
+from ..models import Material, Project, ShareBaseConfig, ShareRecord, Supplier, SupplyRelation
 from ..schemas import (
     QDC_SCORES,
     RISK_DEVIATION_PT,
     RISK_FLUCTUATION_PT,
     WEIGHT_SCHEMES,
+    ShareBaseConfigRead,
+    ShareBaseConfigSave,
+    ShareBaseConfigSaveResult,
+    ShareBaseLineItem,
     ShareImportResult,
     ShareQuadrantPoint,
     ShareRecordCreate,
@@ -510,6 +516,8 @@ async def import_share_records(
     列约定（表头行）：物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C | 基地A | 基地B ...
     - 按 (pn, supplier_code) 定位供应关系，不存在则报错跳过
     - 校验份额 ∈ [0,100]、QDC 五档、同项目同物料份额和 ≈ 100%（容差 ±1%）
+    - 基地列（表头含「基地」）导入为记录的基地配额快照（0-1 小数或 0-100），
+      拉线数自动取项目×月基地配置（未配置记 0，之后保存基地配置会重算对齐）
     - 手动修改过的记录（edited_manually=true）不覆盖，跳过
     """
     try:
@@ -544,6 +552,18 @@ async def import_share_records(
     idx_q = col_idx("Q")
     idx_d = col_idx("D")
     idx_c = col_idx("C")
+
+    # 基地配额列（表头含「基地」的动态列，如 基地A / 基地B…），拉线数取项目×月配置
+    known_idx = {i for i in (idx_pn, idx_scode, idx_share, idx_q, idx_d, idx_c) if i is not None}
+    base_cols: list[tuple[str, int]] = []
+    for i, h in enumerate(header):
+        hs = str(h).strip() if h else ""
+        if hs and "基地" in hs and i not in known_idx:
+            base_cols.append((hs, i))
+    cfg = db.execute(
+        select(ShareBaseConfig).where(ShareBaseConfig.project_id == project_id, ShareBaseConfig.month == month)
+    ).scalar_one_or_none()
+    cfg_lines = {b.get("base"): int(b.get("lines") or 0) for b in _parse_bases(cfg.bases)} if cfg else {}
 
     result = ShareImportResult()
     prev_month = _prev_month(month)
@@ -593,7 +613,31 @@ async def import_share_records(
         if errors:
             result.errors.append(f"第 {row_num} 行: {'；'.join(errors)}")
             continue
-        rows.append(({"share_current": share, "q_score": q, "d_score": d, "c_score": c}, key))
+        # 基地配额列（0-1 小数为主，兼容 0-100；拉线数取项目×月基地配置）
+        bases_data: list[dict] = []
+        base_bad = False
+        for bname, bi in base_cols:
+            raw = row[bi] if bi < len(row) else None
+            if raw is None or str(raw).strip() == "":
+                continue
+            try:
+                bval = float(raw)
+            except (TypeError, ValueError):
+                result.errors.append(f"第 {row_num} 行: 基地「{bname}」配额不是数字")
+                base_bad = True
+                break
+            if not (0 <= bval <= 100):
+                result.errors.append(f"第 {row_num} 行: 基地「{bname}」配额 {bval} 越界（0-1 小数或 0-100）")
+                base_bad = True
+                break
+            bases_data.append({"base": bname, "share": bval, "lines": cfg_lines.get(bname, 0)})
+        if base_bad:
+            continue
+        rows.append((
+            {"share_current": share, "q_score": q, "d_score": d, "c_score": c,
+             "bases": bases_data if bases_data else None},
+            key,
+        ))
 
     # 同项目同物料份额和 ≈ 100% 校验
     share_by_material: dict[str, float] = defaultdict(float)
@@ -616,11 +660,13 @@ async def import_share_records(
         rel = relation_map[key]
         prev = prev_records.get(key)
         if existing is not None:
-            # 更新（不覆盖手改值）
+            # 更新（不覆盖手改值；基地配额列有值时同步覆盖基地快照）
             existing.share_current = data["share_current"] if data["share_current"] is not None else existing.share_current
             existing.q_score = data["q_score"] if data["q_score"] is not None else existing.q_score
             existing.d_score = data["d_score"] if data["d_score"] is not None else existing.d_score
             existing.c_score = data["c_score"] if data["c_score"] is not None else existing.c_score
+            if data["bases"]:
+                existing.bases = json.dumps(data["bases"], ensure_ascii=False)
             result.updated += 1
             _recompute_project_material(db, project_id, rel.material_id, month)
         else:
@@ -634,6 +680,7 @@ async def import_share_records(
                 q_score=data["q_score"],
                 d_score=data["d_score"],
                 c_score=data["c_score"],
+                bases=json.dumps(data["bases"], ensure_ascii=False) if data["bases"] else None,
             )
             db.add(record)
             result.imported += 1
@@ -682,3 +729,114 @@ def _prev_month(month: str) -> str:
     if mon == 1:
         return f"{year - 1:04d}-12"
     return f"{year:04d}-{mon - 1:02d}"
+
+
+# ---------------------------------------------------------------------------
+# 基地拉线配置（项目 × 月，全物料共用）
+# ---------------------------------------------------------------------------
+
+
+def _base_config_items(raw: str | None) -> list[ShareBaseLineItem]:
+    """配置 JSON 文本 → 合法基地项列表（容错：跳过非法项）。"""
+    items: list[ShareBaseLineItem] = []
+    for b in _parse_bases(raw):
+        base = b.get("base")
+        lines = b.get("lines")
+        if isinstance(base, str) and base.strip() and isinstance(lines, int) and lines >= 1:
+            items.append(ShareBaseLineItem(base=base, lines=lines))
+    return items
+
+
+@router.get("/base-config", response_model=ShareBaseConfigRead, summary="项目 × 月 基地拉线配置")
+def share_base_config_get(
+    project_id: int = Query(..., description="项目 ID"),
+    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="月份（YYYY-MM）"),
+    db: Session = Depends(get_db),
+) -> ShareBaseConfigRead:
+    """返回该项目该月的基地拉线配置（未配置时 bases 为空列表）。"""
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    cfg = db.execute(
+        select(ShareBaseConfig).where(ShareBaseConfig.project_id == project_id, ShareBaseConfig.month == month)
+    ).scalar_one_or_none()
+    return ShareBaseConfigRead(
+        project_id=project_id,
+        month=month,
+        bases=_base_config_items(cfg.bases) if cfg else [],
+    )
+
+
+@router.put("/base-config", response_model=ShareBaseConfigSaveResult, summary="保存基地拉线配置（自动重算未手改份额）")
+def share_base_config_save(payload: ShareBaseConfigSave, db: Session = Depends(get_db)) -> ShareBaseConfigSaveResult:
+    """保存项目 × 月 的基地拉线配置（upsert），并按新拉线数重算份额：
+
+    - 拉线数量是基地的属性，同项目同月全物料共用；
+    - 重算范围：该项目该月所有「未手改覆盖」（edited_manually=False）且有基地数据的记录；
+      份额 = Σ(基地份额 × 拉线数) ÷ Σ拉线数（基地份额取记录中已有值，按基地名对齐）；
+    - 记录的基地快照同步为配置的基地集合（保留各基地已有份额值）。
+    """
+    project = db.get(Project, payload.project_id)
+    if not project:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+
+    # 基地名去空白 + 重名校验
+    names = [b.base.strip() for b in payload.bases]
+    if any(not n for n in names):
+        raise HTTPException(422, "基地名不能为空")
+    if len(set(names)) != len(names):
+        raise HTTPException(422, "基地名重复，请修改后重试")
+
+    lines_map: dict[str, int] = dict(zip(names, (b.lines for b in payload.bases)))
+    total_lines = sum(lines_map.values())
+
+    # upsert 配置
+    cfg = db.execute(
+        select(ShareBaseConfig).where(
+            ShareBaseConfig.project_id == payload.project_id, ShareBaseConfig.month == payload.month
+        )
+    ).scalar_one_or_none()
+    cfg_json = json.dumps(
+        [{"base": n, "lines": lines_map[n]} for n in names], ensure_ascii=False
+    )
+    if cfg is None:
+        cfg = ShareBaseConfig(
+            project_id=payload.project_id,
+            month=payload.month,
+            bases=cfg_json,
+        )
+        db.add(cfg)
+    else:
+        cfg.bases = cfg_json
+
+    # 重算未手改记录的份额
+    recalculated = 0
+    skipped_manual = 0
+    for record in _load_records(db, payload.project_id, payload.month):
+        if record.edited_manually:
+            skipped_manual += 1
+            continue
+        rec_bases = _parse_bases(record.bases)
+        if not rec_bases:
+            continue  # 无基地数据的记录不动
+        share_by_base = {b.get("base"): b.get("share") for b in rec_bases if b.get("base")}
+        # 基地快照同步为配置集合，保留已有份额值
+        new_bases = [{"base": n, "share": share_by_base.get(n), "lines": lines_map[n]} for n in names]
+        record.bases = json.dumps(new_bases, ensure_ascii=False)
+        # 份额 = Σ(基地配额 × 拉线数) ÷ Σ拉线数（至少一个基地有配额值才可算）
+        # 量纲归一（规则页 SOP）：基地配额约定 0-1 小数（同基地各供应商合计=1），
+        # 若全部 ≤ 1 视为小数口径 ×100；也兼容直接录百分比（>1）的口径。
+        valued = [(b["share"], b["lines"]) for b in new_bases if b.get("share") is not None]
+        if valued and total_lines > 0:
+            scale = 100 if max(s for s, _ in valued) <= 1 else 1
+            record.share_current = round(sum(s * l for s, l in valued) / total_lines * scale, 2)
+            recalculated += 1
+
+    db.commit()
+    return ShareBaseConfigSaveResult(
+        project_id=payload.project_id,
+        month=payload.month,
+        bases=[ShareBaseLineItem(base=n, lines=lines_map[n]) for n in names],
+        recalculated=recalculated,
+        skipped_manual=skipped_manual,
+    )

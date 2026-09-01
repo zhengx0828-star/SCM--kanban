@@ -510,6 +510,39 @@ class ShareImportResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class ShareBaseLineItem(BaseModel):
+    """基地拉线配置单项。"""
+
+    base: str = Field(..., min_length=1, max_length=50, examples=["基地A"], description="基地名")
+    lines: int = Field(..., ge=1, le=999, description="拉线数量（正整数）")
+
+
+class ShareBaseConfigRead(BaseModel):
+    """项目 × 月 的基地拉线配置（无配置时 bases 为空列表）。"""
+
+    project_id: int
+    month: str
+    bases: list[ShareBaseLineItem] = Field(default_factory=list)
+
+
+class ShareBaseConfigSave(BaseModel):
+    """保存基地拉线配置请求体（保存后自动重算未手改记录的份额）。
+
+    基地 1-4 个动态维护；lines 为该基地拉线数量，全项目当月共用。
+    """
+
+    project_id: int
+    month: str = Field(..., pattern=r"^\d{4}-\d{2}$", examples=["2026-09"])
+    bases: list[ShareBaseLineItem] = Field(..., min_length=1, max_length=4)
+
+
+class ShareBaseConfigSaveResult(ShareBaseConfigRead):
+    """保存结果：配置 + 重算统计。"""
+
+    recalculated: int = 0   # 按新拉线数重算份额的记录数（未手改且有基地数据的）
+    skipped_manual: int = 0  # 跳过的手改记录数
+
+
 # ---------------------------------------------------------------------------
 # 规则条目（各模块 SOP、导入规则等）
 # ---------------------------------------------------------------------------

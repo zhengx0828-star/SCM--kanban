@@ -11,6 +11,29 @@ export interface ShareBase {
   lines?: number;
 }
 
+/** 项目 × 月 基地拉线配置（全物料共用） */
+export interface ShareBaseConfigLine {
+  base: string;
+  lines: number;
+}
+
+export interface ShareBaseConfig {
+  project_id: number;
+  month: string;
+  bases: ShareBaseConfigLine[];
+}
+
+export interface ShareBaseConfigSaveInput {
+  projectId: number;
+  month: string;
+  bases: ShareBaseConfigLine[];
+}
+
+export interface ShareBaseConfigSaveResult extends ShareBaseConfig {
+  recalculated: number;   // 按新拉线数重算份额的记录数
+  skipped_manual: number; // 跳过的手改记录数
+}
+
 /** 份额记录（含派生风险信号） */
 export interface ShareRecord {
   id: number;
