@@ -86,6 +86,17 @@ export function useUpdateShareRecord() {
   });
 }
 
+/** 删除份额记录（不可逆） */
+export function useDeleteShareRecord() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => shareApi.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shareKeys.all });
+    },
+  });
+}
+
 /** Excel 导入 */
 export function useImportShare() {
   const queryClient = useQueryClient();

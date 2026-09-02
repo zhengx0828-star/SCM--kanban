@@ -7,6 +7,7 @@ import {
   Inbox,
   Plus,
   Search,
+  Trash2,
   Wand2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -43,6 +44,7 @@ import { SiteSidebar } from "@/components/site/SiteSidebar";
 import { ShareImportDialog } from "@/components/share/ShareImportDialog";
 import { ShareRecordCreateDialog } from "@/components/share/ShareRecordCreateDialog";
 import {
+  useDeleteShareRecord,
   useRolloverShare,
   useShareProjects,
   useShareRecords,
@@ -131,6 +133,7 @@ export default function ShareRecordsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [rolloverOpen, setRolloverOpen] = useState(false);
+  const [deleting, setDeleting] = useState<ShareRecord | null>(null);
 
   const { data: projects } = useShareProjects();
   const list = projects ?? [];
@@ -150,6 +153,19 @@ export default function ShareRecordsPage() {
   const baseCols = useMemo(() => aggregateBaseCols(records), [records]);
 
   const rollover = useRolloverShare();
+  const deleteRec = useDeleteShareRecord();
+
+  const handleDelete = () => {
+    if (!deleting) return;
+    const target = deleting;
+    deleteRec.mutate(target.id, {
+      onSuccess: () => {
+        toast.success(`「${target.material_name} · ${target.supplier_name}」份额记录已删除`);
+        setDeleting(null);
+      },
+      onError: (e) => toast.error(getApiErrorMessage(e)),
+    });
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -309,6 +325,7 @@ export default function ShareRecordsPage() {
                           <TableHead className="text-right">加权分</TableHead>
                           <TableHead className="text-right">建议配额</TableHead>
                           <TableHead className="text-center">风险</TableHead>
+                          <TableHead className="w-10 text-center">操作</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -363,6 +380,17 @@ export default function ShareRecordsPage() {
                             <TableCell className="text-center">
                               <RiskChips record={r} />
                             </TableCell>
+                            <TableCell className="text-center">
+                              <button
+                                type="button"
+                                onClick={() => setDeleting(r)}
+                                aria-label={`删除 ${r.material_name} ${r.supplier_name} 的份额记录`}
+                                title="删除"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-all hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:text-destructive"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -413,6 +441,57 @@ export default function ShareRecordsPage() {
             </Button>
             <Button onClick={handleRollover} disabled={rollover.isPending}>
               {rollover.isPending ? "结转中…" : "确认结转"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除份额记录确认（不可逆） */}
+      <Dialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>删除份额记录</DialogTitle>
+            <DialogDescription>
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+                此操作不可撤销。剩余记录会按当前 QDC 自动重算建议配额和风险标记。
+              </div>
+              {deleting && (
+                <div className="mt-3 space-y-1 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">物料：</span>
+                    <span className="font-mono">{deleting.pn}</span>
+                    <span className="text-muted-foreground"> · {deleting.material_name}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">供应商：</span>
+                    {deleting.supplier_name}
+                    <span className="text-muted-foreground"> · {deleting.supplier_code}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">月份：</span>
+                    {deleting.month}
+                    <span className="ml-2 text-muted-foreground">本月份额</span>
+                    <span className="ml-1 font-medium">{fmt(deleting.share_current)}</span>
+                  </div>
+                </div>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleting(null)}
+              disabled={deleteRec.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={deleteRec.isPending}
+            >
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              {deleteRec.isPending ? "删除中…" : "确认删除"}
             </Button>
           </DialogFooter>
         </DialogContent>

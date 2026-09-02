@@ -292,6 +292,11 @@ export const shareApi = {
     return apiClient.put<ShareRecord>(`/share/records/${id}`, data).then((res) => res.data);
   },
 
+  /** 删除份额记录（不可逆；后端会重算项目×物料剩余记录的加权分/建议配额/风险） */
+  delete(id: number) {
+    return apiClient.delete(`/share/records/${id}`).then((res) => res.data);
+  },
+
   /** Excel 导入（服务端本地文件路径） */
   importExcel(projectId: number, month: string, filePath: string) {
     return apiClient

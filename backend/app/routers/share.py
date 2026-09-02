@@ -30,7 +30,7 @@ import json
 from collections import defaultdict
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -549,6 +549,26 @@ def update_share_record(record_id: int, payload: ShareRecordUpdate, db: Session 
 
     loaded = db.execute(select(ShareRecord).options(*_SHARE_LOAD).where(ShareRecord.id == record.id)).scalars().one()
     return _to_read(loaded)
+
+
+@router.delete("/records/{record_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除份额记录（不可逆，剩余记录自动重算）")
+def delete_share_record(record_id: int, db: Session = Depends(get_db)) -> Response:
+    record = db.get(ShareRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"份额记录 {record_id} 不存在")
+
+    # 取出物料信息用于删除后重算该项目×物料的剩余记录
+    rel = db.get(SupplyRelation, record.supply_relation_id)
+    material_id = rel.material_id if rel is not None else None
+    project_id = record.project_id
+    month = record.month
+
+    db.delete(record)
+    db.flush()
+    if material_id is not None:
+        _recompute_project_material(db, project_id, material_id, month)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/import", response_model=ShareImportResult, summary="Excel 导入份额数据")
