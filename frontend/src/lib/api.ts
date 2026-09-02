@@ -40,9 +40,6 @@ import type {
   RuleUpdateInput,
 } from "../types/rule";
 import type {
-  ShareBaseConfig,
-  ShareBaseConfigSaveInput,
-  ShareBaseConfigSaveResult,
   ShareDashboardStats,
   ShareImportResult,
   ShareProjectBrief,
@@ -293,18 +290,6 @@ export const shareApi = {
   /** 手动修改（自动重算 + 标记手动） */
   update(id: number, data: ShareRecordUpdateInput) {
     return apiClient.put<ShareRecord>(`/share/records/${id}`, data).then((res) => res.data);
-  },
-
-  /** 项目 × 月 基地拉线配置（未配置时 bases 为空） */
-  getBaseConfig(projectId: number, month: string) {
-    return apiClient
-      .get<ShareBaseConfig>("/share/base-config", { params: { project_id: projectId, month } })
-      .then((res) => res.data);
-  },
-
-  /** 保存基地拉线配置（自动重算未手改记录的份额） */
-  saveBaseConfig(data: ShareBaseConfigSaveInput) {
-    return apiClient.put<ShareBaseConfigSaveResult>("/share/base-config", data).then((res) => res.data);
   },
 
   /** Excel 导入（服务端本地文件路径） */

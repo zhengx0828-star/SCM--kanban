@@ -4,34 +4,18 @@
 export const QDC_SCORES = [1, 0.7, 0.5, 0.3, 0] as const;
 export type QdcScore = (typeof QDC_SCORES)[number];
 
-/** 基地快照：[{base, share, lines}] */
+/** 基地快照单项（每条份额记录里 inline 维护，含拉线数 + 该供应商在该基地的配额）。
+
+    - base   基地名（1-50 字符，必填）
+    - lines  该基地的拉线数量（正整数 1-999，必填，每条记录自带）
+    - share  该供应商在该基地的配额（0-1 小数为主，也兼容 0-100 百分比；可空表示「该供应商不供该基地」）
+
+    系统份额 = Σ(b.share × b.lines) ÷ Σ(b.lines)（基地配额全部 ≤1 视为小数口径 ×100）
+*/
 export interface ShareBase {
   base: string;
-  share?: number;
-  lines?: number;
-}
-
-/** 项目 × 月 基地拉线配置（全物料共用） */
-export interface ShareBaseConfigLine {
-  base: string;
   lines: number;
-}
-
-export interface ShareBaseConfig {
-  project_id: number;
-  month: string;
-  bases: ShareBaseConfigLine[];
-}
-
-export interface ShareBaseConfigSaveInput {
-  projectId: number;
-  month: string;
-  bases: ShareBaseConfigLine[];
-}
-
-export interface ShareBaseConfigSaveResult extends ShareBaseConfig {
-  recalculated: number;   // 按新拉线数重算份额的记录数
-  skipped_manual: number; // 跳过的手改记录数
+  share?: number | null;
 }
 
 /** 份额记录（含派生风险信号） */

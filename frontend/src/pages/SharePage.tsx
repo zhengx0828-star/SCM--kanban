@@ -7,7 +7,6 @@ import {
   CircleAlert,
   ClipboardList,
   FileUp,
-  Factory,
   Inbox,
   RefreshCcw,
 } from "lucide-react";
@@ -245,7 +244,9 @@ export default function SharePage() {
                           <div
                             key={r.record_id}
                             className={`flex items-center gap-3 rounded-md px-3 py-2 ${
-                              r.risk_level === "high" ? "bg-red-50" : "bg-amber-50"
+                              r.risk_level === "high"
+                                ? "bg-red-500/10"
+                                : "bg-amber-500/10"
                             }`}
                           >
                             <span className={`h-2 w-2 shrink-0 rounded-full ${r.risk_level === "high" ? "bg-red-500" : "bg-amber-500"}`} />
@@ -257,7 +258,11 @@ export default function SharePage() {
                               </div>
                               <p className="mt-0.5 truncate text-xs text-muted-foreground">{r.detail}</p>
                             </div>
-                            <span className={`shrink-0 text-xs font-medium ${r.risk_level === "high" ? "text-red-600" : "text-amber-600"}`}>
+                            <span className={`shrink-0 text-xs font-medium ${
+                              r.risk_level === "high"
+                                ? "text-red-600 dark:text-red-400"
+                                : "text-amber-600 dark:text-amber-400"
+                            }`}>
                               {RISK_TYPE_LABELS[r.risk_type]}
                             </span>
                           </div>
@@ -299,7 +304,11 @@ function KpiCard({ label, value, loading, tone, sub }: {
   tone: "red" | "amber" | "blue";
   sub?: string;
 }) {
-  const color = tone === "red" ? "text-red-600" : tone === "amber" ? "text-amber-600" : "text-blue-600";
+  const color = tone === "red"
+    ? "text-red-600 dark:text-red-400"
+    : tone === "amber"
+      ? "text-amber-600 dark:text-amber-400"
+      : "text-blue-600 dark:text-blue-400";
   return (
     <Card>
       <CardContent className="p-4">

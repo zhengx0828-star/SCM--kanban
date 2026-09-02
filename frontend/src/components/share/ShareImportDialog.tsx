@@ -19,7 +19,12 @@ import { getApiErrorMessage } from "@/lib/utils";
  * 份额数据 Excel 导入弹窗（按项目导入）。
  *
  * 说明：当前为本地开发模式，导入走「服务端文件路径」（前端上传后续接）。
- * Excel 列约定（表头行）：物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C
+ * Excel 列约定（表头行，基地按成对两列）：
+ *   物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C |
+ *   基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数 | ...
+ * - 份额列为百分比（0-100）；基地份额同样为 0-100（不供该基地留空整对）
+ * - 「本月份额」可留空：有基地数据时后端按 Σ(基地份额 × 拉线数) ÷ Σ拉线数 自动算
+ * - 每条记录自带拉线数（不再有独立的基地拉线配置）
  */
 
 interface Props {
@@ -80,7 +85,8 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
               placeholder="如 C:/share/2026-08.xlsx"
             />
             <p className="text-[11px] text-muted-foreground">
-              开发模式暂用服务端本地路径；列顺序：物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C
+              开发模式暂用服务端本地路径；列顺序：物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C |
+              基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数…（基地成对两列）
             </p>
           </div>
 
@@ -90,9 +96,10 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
             <p className="font-medium text-foreground">导入校验规则（规则页 SOP）</p>
             <ul className="mt-1 list-inside list-disc space-y-0.5">
               <li>Q / D / C 仅允许五档：1 / 0.7 / 0.5 / 0.3 / 0</li>
-              <li>份额需在 0-100 之间</li>
+              <li>份额与基地份额均为 0-100；基地线数 ≥ 1（份额、线数成对填写）</li>
               <li>同一物料各供应商份额和 ≈ 100%（容差 ±1%）</li>
               <li>供应商代码与物料 PN 需已存在于主数据</li>
+              <li>手动修改过的记录（编辑过份额）不覆盖，跳过</li>
             </ul>
           </div>
         </div>

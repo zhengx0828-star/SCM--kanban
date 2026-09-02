@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   CalendarRange,
-  Factory,
   FileUp,
   Inbox,
   Plus,
@@ -24,8 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
+import { Skeleton } from "@/components/ui/skeleton";import {
   Select,
   SelectContent,
   SelectItem,
@@ -42,18 +40,16 @@ import {
 } from "@/components/ui/table";
 import { SiteHeader } from "@/components/site/SiteHeader";
 import { SiteSidebar } from "@/components/site/SiteSidebar";
-import { ShareBaseConfigDialog } from "@/components/share/ShareBaseConfigDialog";
 import { ShareImportDialog } from "@/components/share/ShareImportDialog";
 import { ShareRecordCreateDialog } from "@/components/share/ShareRecordCreateDialog";
 import {
   useRolloverShare,
-  useShareBaseConfig,
   useShareProjects,
   useShareRecords,
   useUpdateShareRecord,
 } from "@/hooks/use-share";
 import { cn, getApiErrorMessage } from "@/lib/utils";
-import { QDC_SCORES, type ShareBaseConfigLine, type ShareRecord, type ShareRecordUpdateInput, type ShareSummary } from "@/types/share";
+import { QDC_SCORES, type ShareBase, type ShareRecord, type ShareRecordUpdateInput, type ShareSummary } from "@/types/share";
 
 /* -------------------------------------------------------------------------- */
 /*  工具                                                                      */
@@ -85,6 +81,35 @@ function fmt(v: number | null | undefined): string {
   return `${Math.round(v)}%`;
 }
 
+/** 聚合当月记录 → 基地并集列。lines 取该基地出现最多的拉线数（众数），列序按首现顺序。 */
+function aggregateBaseCols(
+  records: ShareRecord[]
+): { base: string; lines: number }[] {
+  const linesByBase = new Map<string, number[]>();
+  for (const r of records) {
+    for (const b of r.bases ?? []) {
+      if (!b.base) continue;
+      if (!linesByBase.has(b.base)) linesByBase.set(b.base, []);
+      if (b.lines != null && b.lines >= 1) linesByBase.get(b.base)!.push(b.lines);
+    }
+  }
+  const out: { base: string; lines: number }[] = [];
+  for (const [base, arr] of linesByBase) {
+    const cnt = new Map<number, number>();
+    for (const l of arr) cnt.set(l, (cnt.get(l) ?? 0) + 1);
+    let best = 1;
+    let bestN = -1;
+    for (const [l, n] of cnt) {
+      if (n > bestN) {
+        best = l;
+        bestN = n;
+      }
+    }
+    out.push({ base, lines: best });
+  }
+  return out;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  页面                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -106,7 +131,6 @@ export default function ShareRecordsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [rolloverOpen, setRolloverOpen] = useState(false);
-  const [baseConfigOpen, setBaseConfigOpen] = useState(false);
 
   const { data: projects } = useShareProjects();
   const list = projects ?? [];
@@ -121,9 +145,9 @@ export default function ShareRecordsPage() {
   const records = recordsData?.items ?? [];
   const options = useMemo(() => monthOptions(), []);
 
-  // 基地拉线配置（项目 × 月）：配置了基地则表格追加动态「基地配额」列
-  const { data: baseConfig } = useShareBaseConfig(projectId, month);
-  const baseCols = baseConfig?.bases ?? [];
+  // 基地列 = 当月全部记录 bases 的基地并集（每条记录自带 lines；同基地跨记录拉线数应一致）。
+  // 每基地列头显示该基地出现最多的拉线数；行内该基地配额以该记录自己的值为准。
+  const baseCols = useMemo(() => aggregateBaseCols(records), [records]);
 
   const rollover = useRolloverShare();
 
@@ -198,10 +222,6 @@ export default function ShareRecordsPage() {
                 <Button variant="outline" onClick={() => setRolloverOpen(true)} disabled={!projectId}>
                   <Wand2 className="mr-1.5 h-4 w-4" />
                   月末结转
-                </Button>
-                <Button variant="outline" onClick={() => setBaseConfigOpen(true)} disabled={!projectId}>
-                  <Factory className="mr-1.5 h-4 w-4" />
-                  基地配置
                 </Button>
                 <Button variant="outline" onClick={() => setImportOpen(true)} disabled={!projectId}>
                   <FileUp className="mr-1.5 h-4 w-4" />
@@ -313,7 +333,7 @@ export default function ShareRecordsPage() {
                             </TableCell>
                             {baseCols.map((b) => (
                               <TableCell key={b.base} className="text-right">
-                                <BaseInlineCell record={r} col={b} configBases={baseCols} />
+                                <BaseInlineCell record={r} col={b} />
                               </TableCell>
                             ))}
                             <TableCell className="text-right text-muted-foreground tabular-nums">
@@ -334,7 +354,7 @@ export default function ShareRecordsPage() {
                             <TableCell className="text-right tabular-nums">
                               <span
                                 className={cn(
-                                  r.risk_deviation && "font-medium text-amber-600"
+                                  r.risk_deviation && "font-medium text-amber-600 dark:text-amber-400"
                                 )}
                               >
                                 {fmt(r.quota_suggested)}
@@ -364,12 +384,6 @@ export default function ShareRecordsPage() {
       <ShareImportDialog
         open={importOpen}
         onOpenChange={setImportOpen}
-        projectId={projectId}
-        month={month}
-      />
-      <ShareBaseConfigDialog
-        open={baseConfigOpen}
-        onOpenChange={setBaseConfigOpen}
         projectId={projectId}
         month={month}
       />
@@ -499,7 +513,7 @@ function ShareInlineCell({ record }: { record: ShareRecord }) {
       }}
       className={cn(
         "inline-flex h-7 min-w-[3.5rem] cursor-pointer items-center justify-end rounded px-2 tabular-nums transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        record.risk_fluctuation && "font-medium text-red-600",
+        record.risk_fluctuation && "font-medium text-red-600 dark:text-red-400",
         record.share_current == null && "italic text-muted-foreground"
       )}
       title="点击修改"
@@ -510,21 +524,21 @@ function ShareInlineCell({ record }: { record: ShareRecord }) {
 }
 
 /**
- * 单元格：基地配额（0-1 小数口径为主，兼容直接录百分比）。
- * 点击进入编辑；提交后按「多基地份额」公式同步重算本月份额：
- * 份额 = Σ(基地配额 × 拉线数) ÷ Σ拉线数（全部 ≤1 视为小数口径 ×100）。
- * 留空 = 清除该基地配额。
+ * 单元格：该供应商在某基地的份额（%）。
+ * 每条份额记录自带 bases（[{base, lines, share}]）——行内直接改该基地的份额：
+ * - 记录里没有该基地行（该供应商不供此基地）→ 显示「—」，点击可录入；
+ * - 编辑只 PUT bases（不传 share_current）→ 后端按 Σ(份额×拉线) ÷ Σ拉线 自动重算本月份额并清手改标记。
+ * 同基地的拉线数量以记录自身值为准（列头展示的是当月众数，仅作参考）。
  */
 function BaseInlineCell({
   record,
   col,
-  configBases,
 }: {
   record: ShareRecord;
-  col: ShareBaseConfigLine;
-  configBases: ShareBaseConfigLine[];
+  col: { base: string; lines: number };
 }) {
-  const current = record.bases?.find((b) => b.base === col.base)?.share;
+  const row = record.bases?.find((b) => b.base === col.base);
+  const current = row?.share != null ? row.share : null;
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(current != null ? String(current) : "");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -552,7 +566,7 @@ function BaseInlineCell({
     const trimmed = val.trim();
     const next = trimmed === "" ? null : Number(trimmed);
     if (next != null && (Number.isNaN(next) || next < 0 || next > 100)) {
-      toast.error("基地配额应为 0-1 小数（或 0-100 百分比）");
+      toast.error("份额应为 0-100 之间的数字（%）：不供该基地请清空");
       reset();
       return;
     }
@@ -560,29 +574,23 @@ function BaseInlineCell({
       setEditing(false);
       return;
     }
-    // 组装新 bases：以配置的基地集合为准，保留其他基地已有配额
-    const existing = new Map((record.bases ?? []).map((b) => [b.base, b.share]));
-    if (next == null) existing.delete(col.base);
-    else existing.set(col.base, next);
-    const newBases = configBases.map((c) => ({
-      base: c.base,
-      lines: c.lines,
-      share: existing.get(c.base) ?? undefined,
-    }));
-    // 按公式重算本月份额（与后端 /base-config 重算口径一致）
-    const totalLines = configBases.reduce((s, c) => s + c.lines, 0);
-    const valued = newBases.filter((b) => b.share != null);
-    const data: ShareRecordUpdateInput = { bases: newBases };
-    if (valued.length > 0 && totalLines > 0) {
-      const scale = Math.max(...valued.map((b) => b.share!)) <= 1 ? 100 : 1;
-      data.share_current = Number(
-        (valued.reduce((s, b) => s + b.share! * b.lines, 0) / totalLines * scale).toFixed(2)
-      );
+    // 重写该记录的 bases：保留其他基地行；目标基地行更新/新增/清份额
+    const existing = (record.bases ?? []).map((b) => ({ ...b }));
+    const idx = existing.findIndex((b) => b.base === col.base);
+    const lines = row?.lines != null && row.lines >= 1 ? row.lines : col.lines;
+    if (next == null) {
+      // 清空份额 = 不供该基地：保留行（拉线仍计入分母），share 置空
+      if (idx >= 0) existing[idx] = { base: col.base, lines, share: null };
+      else return reset(); // 本来就无此行且清空 → 无变化
+    } else if (idx >= 0) {
+      existing[idx] = { base: col.base, lines, share: next };
+    } else {
+      existing.push({ base: col.base, lines, share: next });
     }
     update.mutate(
-      { id: record.id, data },
+      { id: record.id, data: { bases: existing } },
       {
-        onSuccess: () => toast.success(`「${record.supplier_name}」${col.base} 配额已更新`),
+        onSuccess: () => toast.success(`「${record.supplier_name}」${col.base} 份额已更新，本月份额已自动重算`),
         onError: (e) => {
           toast.error(getApiErrorMessage(e));
           reset();
@@ -599,7 +607,7 @@ function BaseInlineCell({
         type="number"
         min={0}
         max={100}
-        step={0.1}
+        step={0.5}
         value={val}
         onChange={(e) => setVal(e.target.value)}
         onBlur={commit}
@@ -630,9 +638,9 @@ function BaseInlineCell({
         "inline-flex h-7 min-w-[3.5rem] cursor-pointer items-center justify-end rounded px-2 tabular-nums transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         current == null && "italic text-muted-foreground"
       )}
-      title="点击修改基地配额（0-1 小数）"
+      title={current == null ? "该供应商不供此基地，点击录入份额" : "点击修改基地份额（%）"}
     >
-      {current != null ? String(current) : "—"}
+      {current != null ? `${current}%` : "—"}
     </span>
   );
 }
@@ -685,11 +693,11 @@ function QdcInlineCell({
 
 function RiskChips({ record }: { record: ShareRecord }) {
   const chips: { label: string; cls: string }[] = [];
-  if (record.risk_sole) chips.push({ label: "独供", cls: "bg-red-100 text-red-700" });
+  if (record.risk_sole) chips.push({ label: "独供", cls: "bg-red-500/10 text-red-600 dark:text-red-400" });
   if (record.risk_fluctuation)
-    chips.push({ label: "波动", cls: "bg-red-100 text-red-700" });
+    chips.push({ label: "波动", cls: "bg-red-500/10 text-red-600 dark:text-red-400" });
   if (record.risk_deviation)
-    chips.push({ label: "偏差", cls: "bg-amber-100 text-amber-700" });
+    chips.push({ label: "偏差", cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" });
   if (chips.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
   return (
     <span className="inline-flex gap-1">

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { shareApi } from "../lib/api";
-import type { ShareBaseConfigSaveInput, ShareRecordCreateInput, ShareRecordUpdateInput } from "../types/share";
+import type { ShareRecordCreateInput, ShareRecordUpdateInput } from "../types/share";
 
 export const shareKeys = {
   all: ["share"] as const,
@@ -10,7 +10,6 @@ export const shareKeys = {
   risks: (projectId: number, month: string, top?: number) => ["share", "risks", projectId, month, top] as const,
   quadrant: (projectId: number, month: string) => ["share", "quadrant", projectId, month] as const,
   records: (projectId: number, month: string, keyword?: string) => ["share", "records", projectId, month, keyword] as const,
-  baseConfig: (projectId: number, month: string) => ["share", "baseConfig", projectId, month] as const,
 };
 
 /** Dashboard 联动统计（份额波动/独供，跨项目最新月） */
@@ -81,26 +80,6 @@ export function useUpdateShareRecord() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: ShareRecordUpdateInput }) => shareApi.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shareKeys.all });
-    },
-  });
-}
-
-/** 项目 × 月 基地拉线配置 */
-export function useShareBaseConfig(projectId: number | null, month: string) {
-  return useQuery({
-    queryKey: shareKeys.baseConfig(projectId ?? 0, month),
-    queryFn: () => shareApi.getBaseConfig(projectId!, month),
-    enabled: projectId != null,
-  });
-}
-
-/** 保存基地拉线配置（后端自动重算未手改记录的份额） */
-export function useSaveShareBaseConfig() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: ShareBaseConfigSaveInput) => shareApi.saveBaseConfig(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shareKeys.all });
     },

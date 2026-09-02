@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ProductStatus = Literal["active", "inactive", "archived"]
 # 供应商风险等级（地图点位红黄绿）。None = 未评估；判定规则未定，录入不要求提供
@@ -395,8 +395,44 @@ class ShareRecordBase(BaseModel):
     q_score: Optional[float] = Field(None, description="质量评分（五档：1/0.7/0.5/0.3/0）")
     d_score: Optional[float] = Field(None, description="交付评分（五档）")
     c_score: Optional[float] = Field(None, description="成本评分（五档）")
-    bases: Optional[list[dict]] = Field(None, description="基地快照：[{base, share, lines}]")
+    bases: Optional[list["ShareBase"]] = Field(None, description="基地快照：每项 {base, share, lines}（按物料录入时直接带拉线数）")
     remark: Optional[str] = Field(None, max_length=2000)
+
+
+class ShareBase(BaseModel):
+    """基地快照单项（每条份额记录里 inline 维护）。
+
+    每条 share_record 可以有多基地配额 + 对应拉线数；
+    系统份额 = Σ(b.share × b.lines) ÷ Σ(b.lines)（基地配额约定 0-1 小数，全部 ≤1 视为小数口径 ×100）。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    base: str = Field(..., min_length=1, max_length=50, examples=["基地A"], description="基地名（必填，1-50 字符）")
+    lines: int = Field(..., ge=1, le=999, description="该基地的拉线数量（正整数 1-999）")
+    share: Optional[float] = Field(None, ge=0, le=100, description="该供应商在该基地的配额（0-1 小数 或 0-100 百分比）；None = 该供应商不供该基地")
+
+    @field_validator("base")
+    @classmethod
+    def _base_not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("基地名不能为空")
+        return v.strip()
+
+    @field_validator("lines")
+    @classmethod
+    def _lines_positive_int(cls, v) -> int:
+        if v is None:
+            raise ValueError("拉线数量不能为空，请填写正整数")
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("拉线数量必须为正整数")
+        if v < 1:
+            raise ValueError("拉线数量必须为正整数（≥1）")
+        return v
+
+
+# ShareRecordBase 字段引用 ShareBase 强类型，前向引用
+ShareRecordBase.model_rebuild()
 
 
 class ShareRecordCreate(ShareRecordBase):
@@ -413,7 +449,7 @@ class ShareRecordUpdate(BaseModel):
     q_score: Optional[float] = Field(None, description="质量评分（五档）")
     d_score: Optional[float] = Field(None, description="交付评分（五档）")
     c_score: Optional[float] = Field(None, description="成本评分（五档）")
-    bases: Optional[list[dict]] = Field(None, description="基地快照：[{base, share, lines}]")
+    bases: Optional[list[ShareBase]] = Field(None, description="基地快照：每项 {base, share, lines}")
     remark: Optional[str] = Field(None, max_length=2000)
 
 
@@ -508,39 +544,6 @@ class ShareImportResult(BaseModel):
     updated: int = 0
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)
-
-
-class ShareBaseLineItem(BaseModel):
-    """基地拉线配置单项。"""
-
-    base: str = Field(..., min_length=1, max_length=50, examples=["基地A"], description="基地名")
-    lines: int = Field(..., ge=1, le=999, description="拉线数量（正整数）")
-
-
-class ShareBaseConfigRead(BaseModel):
-    """项目 × 月 的基地拉线配置（无配置时 bases 为空列表）。"""
-
-    project_id: int
-    month: str
-    bases: list[ShareBaseLineItem] = Field(default_factory=list)
-
-
-class ShareBaseConfigSave(BaseModel):
-    """保存基地拉线配置请求体（保存后自动重算未手改记录的份额）。
-
-    基地 1-4 个动态维护；lines 为该基地拉线数量，全项目当月共用。
-    """
-
-    project_id: int
-    month: str = Field(..., pattern=r"^\d{4}-\d{2}$", examples=["2026-09"])
-    bases: list[ShareBaseLineItem] = Field(..., min_length=1, max_length=4)
-
-
-class ShareBaseConfigSaveResult(ShareBaseConfigRead):
-    """保存结果：配置 + 重算统计。"""
-
-    recalculated: int = 0   # 按新拉线数重算份额的记录数（未手改且有基地数据的）
-    skipped_manual: int = 0  # 跳过的手改记录数
 
 
 # ---------------------------------------------------------------------------
