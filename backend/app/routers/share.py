@@ -265,34 +265,60 @@ def share_dashboard_stats(db: Session = Depends(get_db)) -> dict:
 
     - 取「最新有份额数据的月份」；
     - 份额波动物料数：跨全部项目，|本月 − 上期| ≥ 30pt 的物料数（按物料 PN 去重）；
-    - 重点物料独供数量：跨全部项目，独供（同项目同物料仅 1 家）的物料数（按物料 PN 去重）。
+    - 重点物料独供数量：跨全部项目，独供（同项目同物料仅 1 家）的物料数（按物料 PN 去重）；
+    - by_project：按项目分组的波动/独供物料数（供份额首页项目卡片标注）。
     """
     latest_month = db.execute(select(func.max(ShareRecord.month))).scalar_one_or_none()
     if latest_month is None:
-        return {"month": None, "fluctuation_materials": 0, "sole_materials": 0}
+        return {"month": None, "fluctuation_materials": 0, "sole_materials": 0, "by_project": []}
 
     records = _load_all_records(db, latest_month)
 
     fluctuation_pns: set[str] = set()
     sole_pns: set[str] = set()
+    # 项目信息 + 项目内按 PN 去重的波动/独供集合
+    project_info: dict[int, tuple[str, str]] = {}
+    per_project_fluct: dict[int, set[str]] = defaultdict(set)
+    per_project_sole: dict[int, set[str]] = defaultdict(set)
+
     for r in records:
         rel = r.supply_relation
         pn = rel.material.pn if rel.material else ""
         if not pn:
             continue
+        pid = r.project_id
+        if pid not in project_info:
+            project_info[pid] = (
+                r.project.code if r.project else "",
+                r.project.name if r.project else "",
+            )
         if r.is_sole:
             sole_pns.add(pn)
+            per_project_sole[pid].add(pn)
         if (
             r.share_current is not None
             and r.share_prev is not None
             and abs(r.share_current - r.share_prev) >= RISK_FLUCTUATION_PT
         ):
             fluctuation_pns.add(pn)
+            per_project_fluct[pid].add(pn)
+
+    by_project = [
+        {
+            "project_id": pid,
+            "code": project_info[pid][0],
+            "name": project_info[pid][1],
+            "fluctuation_materials": len(per_project_fluct[pid]),
+            "sole_materials": len(per_project_sole[pid]),
+        }
+        for pid in sorted(project_info)
+    ]
 
     return {
         "month": latest_month,
         "fluctuation_materials": len(fluctuation_pns),
         "sole_materials": len(sole_pns),
+        "by_project": by_project,
     }
 
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
@@ -22,13 +22,14 @@ import { SiteSidebar } from "@/components/site/SiteSidebar";
 import { ShareQuadrantChart } from "@/components/share/ShareQuadrantChart";
 import {
   useRolloverShare,
+  useShareDashboardStats,
   useShareProjects,
   useShareQuadrant,
   useShareRisks,
   useShareSummary,
 } from "@/hooks/use-share";
 import { getApiErrorMessage } from "@/lib/utils";
-import { RISK_TYPE_LABELS } from "@/types/share";
+import { RISK_TYPE_LABELS, type ShareRiskItem } from "@/types/share";
 
 /** 当前月份（YYYY-MM） */
 function currentMonth(): string {
@@ -47,6 +48,22 @@ function monthOptions(): string[] {
   return out;
 }
 
+/** 风险筛选：全部 或 某一风险类型（与后端 risk_type 对齐） */
+type RiskFilter = "all" | ShareRiskItem["risk_type"];
+
+const RISK_FILTERS: { value: RiskFilter; label: string }[] = [
+  { value: "all", label: "全部风险" },
+  { value: "sole", label: "独供" },
+  { value: "fluctuation", label: "波动" },
+  { value: "deviation", label: "偏差" },
+  { value: "mismatch", label: "错配" },
+];
+
+/** 校验 URL 里的 risk 参数是否为合法风险类型 */
+function parseRiskFilter(value: string | null): RiskFilter {
+  return value && RISK_FILTERS.some((f) => f.value === value) ? (value as RiskFilter) : "all";
+}
+
 /**
  * 份额管理 · 项目入口页。
  *
@@ -57,22 +74,47 @@ function monthOptions(): string[] {
 export default function SharePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [month, setMonth] = useState(currentMonth());
+  const [month, setMonth] = useState(() => searchParams.get("month") ?? currentMonth());
+  const riskFromUrl = searchParams.get("risk");
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>(() => parseRiskFilter(riskFromUrl));
 
   // 项目选择：URL ?project_id= 优先，否则第一个项目
   const { data: projects, isLoading: projectsLoading } = useShareProjects();
   const list = projects ?? [];
 
+  // 项目卡片风险标注（与 Dashboard 同源，跨项目最新月，复用缓存无额外请求）
+  const { data: shareDashboard } = useShareDashboardStats();
+
   const urlProjectId = searchParams.get("project_id");
   const [selected, setSelected] = useState<number | null>(() => (urlProjectId ? Number(urlProjectId) : null));
+
+  // 从 Dashboard 带 risk 进入时，自动定位到第一个有该风险类型的项目
+  useEffect(() => {
+    if (selected != null || projectsLoading) return;
+    const r = parseRiskFilter(riskFromUrl);
+    if (r !== "fluctuation" && r !== "sole") return;
+    const briefs = shareDashboard?.by_project;
+    const target = briefs?.find((b) =>
+      r === "fluctuation" ? b.fluctuation_materials > 0 : b.sole_materials > 0
+    );
+    if (target) setSelected(target.project_id);
+  }, [riskFromUrl, selected, projectsLoading, shareDashboard]);
+
   const projectId = selected ?? list[0]?.project_id ?? null;
   const activeProject = list.find((p) => p.project_id === projectId);
 
   const { data: summary, isLoading: summaryLoading } = useShareSummary(projectId, month);
-  const { data: risks, isLoading: risksLoading } = useShareRisks(projectId, month, 10);
+  const { data: risks, isLoading: risksLoading } = useShareRisks(projectId, month, 100);
   const { data: quadrant } = useShareQuadrant(projectId, month);
   const rolloverMutation = useRolloverShare();
   const options = useMemo(() => monthOptions(), []);
+
+  // 按风险筛选过滤风险排行
+  const filteredRisks = useMemo(() => {
+    if (!risks) return risks;
+    if (riskFilter === "all") return risks;
+    return risks.filter((r) => r.risk_type === riskFilter);
+  }, [risks, riskFilter]);
 
   const handleRollover = () => {
     if (!projectId) return;
@@ -162,6 +204,7 @@ export default function SharePage() {
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {list.map((p) => {
                     const hasData = p.months.length > 0;
+                    const brief = shareDashboard?.by_project?.find((b) => b.project_id === p.project_id);
                     return (
                       <button
                         key={p.project_id}
@@ -185,6 +228,20 @@ export default function SharePage() {
                             ? `${p.months.length} 个月有数据 · 最新 ${p.months[p.months.length - 1]}`
                             : "暂无数据 · 点此进入录入"}
                         </p>
+                        {brief && (brief.fluctuation_materials > 0 || brief.sole_materials > 0) && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {brief.fluctuation_materials > 0 && (
+                              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                                波动 {brief.fluctuation_materials}
+                              </span>
+                            )}
+                            {brief.sole_materials > 0 && (
+                              <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+                                独供 {brief.sole_materials}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </button>
                     );
                   })}
@@ -220,12 +277,27 @@ export default function SharePage() {
                 {/* 风险排行 */}
                 <Card className="mt-6">
                   <CardContent className="p-5">
-                    <div className="mb-4 flex items-center justify-between">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <AlertTriangle className="h-4 w-4 text-red-500" />
-                        <h2 className="text-sm font-medium">风险排行 Top {risks?.length ?? 0}</h2>
+                        <h2 className="text-sm font-medium">风险排行</h2>
+                        <Badge variant="secondary" className="font-normal">
+                          {filteredRisks?.length ?? 0} 条
+                        </Badge>
                       </div>
-                      <span className="text-xs text-muted-foreground">红色 = 高优先级（独供 / 波动），黄色 = 关注（偏差 / 错配）</span>
+                      <div className="flex items-center gap-2">
+                        <Select value={riskFilter} onValueChange={(v) => setRiskFilter(v as RiskFilter)}>
+                          <SelectTrigger className="h-8 w-28">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {RISK_FILTERS.map((f) => (
+                              <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">红 = 高优先级，黄 = 关注</span>
+                      </div>
                     </div>
                     {risksLoading ? (
                       <div className="space-y-2">
@@ -238,9 +310,16 @@ export default function SharePage() {
                         title="本月暂无风险预警"
                         description="该项目该月没有独供 / 波动 / 偏差 / 错配记录"
                       />
+                    ) : !filteredRisks || filteredRisks.length === 0 ? (
+                      <EmptyState
+                        size="sm"
+                        icon={<CircleAlert className="h-6 w-6" />}
+                        title={`${RISK_TYPE_LABELS[riskFilter as ShareRiskItem["risk_type"]]} 暂无风险`}
+                        description="可切换上方风险筛选查看其他类型"
+                      />
                     ) : (
                       <div className="space-y-2">
-                        {risks.map((r) => (
+                        {filteredRisks.map((r) => (
                           <div
                             key={r.record_id}
                             className={`flex items-center gap-3 rounded-md px-3 py-2 ${

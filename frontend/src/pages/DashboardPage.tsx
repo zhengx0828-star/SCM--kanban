@@ -111,7 +111,8 @@ export default function DashboardPage() {
         hint: shareStats?.month ? `${shareStats.month} 波动 ≥ 30pt` : "暂无份额数据",
         icon: TrendingUp,
         chip: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-        onClick: () => navigate("/share"),
+        onClick: () =>
+          navigate(shareStats?.month ? `/share?risk=fluctuation&month=${shareStats.month}` : "/share"),
       },
       {
         label: "重点物料独供数量",
@@ -119,7 +120,8 @@ export default function DashboardPage() {
         hint: shareStats?.month ? `${shareStats.month} 独供物料` : "暂无份额数据",
         icon: ShieldAlert,
         chip: "bg-red-500/10 text-red-600 dark:text-red-400",
-        onClick: () => navigate("/share"),
+        onClick: () =>
+          navigate(shareStats?.month ? `/share?risk=sole&month=${shareStats.month}` : "/share"),
       },
       ...BASE_STATS,
     ],

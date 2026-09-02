@@ -123,11 +123,21 @@ export interface ShareImportResult {
   errors: string[];
 }
 
+/** 份额首页项目卡片标注：单项目的波动/独供物料数（最新数据月口径） */
+export interface ShareProjectRiskBrief {
+  project_id: number;
+  code: string;
+  name: string;
+  fluctuation_materials: number;
+  sole_materials: number;
+}
+
 /** Dashboard 联动统计（跨项目、最新月） */
 export interface ShareDashboardStats {
   month: string | null;
   fluctuation_materials: number;
   sole_materials: number;
+  by_project: ShareProjectRiskBrief[];
 }
 
 /** 风险标签映射（前端展示） */
