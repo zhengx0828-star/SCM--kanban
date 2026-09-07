@@ -29,7 +29,7 @@ import {
   useShareSummary,
 } from "@/hooks/use-share";
 import { getApiErrorMessage } from "@/lib/utils";
-import { RISK_TYPE_LABELS, type ShareRiskItem } from "@/types/share";
+import { RISK_TYPE_LABELS, RISK_TYPE_META, type ShareRiskItem } from "@/types/share";
 
 /** 当前月份（YYYY-MM） */
 function currentMonth(): string {
@@ -269,7 +269,7 @@ export default function SharePage() {
                 <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <KpiCard label="独供物料" value={summary?.sole_materials} loading={summaryLoading} tone="red"
                     sub={summary ? `占物料总数 ${pct(summary.sole_materials, summary.total_materials)}` : undefined} />
-                  <KpiCard label="份额波动预警" value={summary?.fluctuation_alerts} loading={summaryLoading} tone="amber" sub="|本月 − 上期| ≥ 30pt" />
+                  <KpiCard label="份额波动预警" value={summary?.fluctuation_alerts} loading={summaryLoading} tone="amber" sub="相对上月变化 ≥ ±30%" />
                   <KpiCard label="建议偏差预警" value={summary?.deviation_alerts} loading={summaryLoading} tone="amber" sub="|本月 − 上月建议| > 5pt" />
                   <KpiCard label="高粘性供应商" value={summary?.sticky_suppliers} loading={summaryLoading} tone="blue" sub="当月覆盖物料 ≥ 3" />
                 </div>
@@ -296,7 +296,7 @@ export default function SharePage() {
                             ))}
                           </SelectContent>
                         </Select>
-                        <span className="text-xs text-muted-foreground">红 = 高优先级，黄 = 关注</span>
+                        <span className="text-xs text-muted-foreground">红 = 独供，黄 = 波动 / 偏差，紫 = 错配</span>
                       </div>
                     </div>
                     {risksLoading ? (
@@ -319,33 +319,28 @@ export default function SharePage() {
                       />
                     ) : (
                       <div className="space-y-2">
-                        {filteredRisks.map((r) => (
-                          <div
-                            key={r.record_id}
-                            className={`flex items-center gap-3 rounded-md px-3 py-2 ${
-                              r.risk_level === "high"
-                                ? "bg-red-500/10"
-                                : "bg-amber-500/10"
-                            }`}
-                          >
-                            <span className={`h-2 w-2 shrink-0 rounded-full ${r.risk_level === "high" ? "bg-red-500" : "bg-amber-500"}`} />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="truncate text-sm font-medium">{r.material_name}</span>
-                                <span className="text-xs text-muted-foreground">{r.pn}</span>
-                                <Badge variant="secondary" className="shrink-0 font-normal">{r.supplier_name}</Badge>
+                        {filteredRisks.map((r) => {
+                          const meta = RISK_TYPE_META[r.risk_type];
+                          return (
+                            <div
+                              key={r.record_id}
+                              className={`flex items-center gap-3 rounded-md px-3 py-2 ${meta.rowBg}`}
+                            >
+                              <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate text-sm font-medium">{r.material_name}</span>
+                                  <span className="text-xs text-muted-foreground">{r.pn}</span>
+                                  <Badge variant="secondary" className="shrink-0 font-normal">{r.supplier_name}</Badge>
+                                </div>
+                                <p className="mt-0.5 truncate text-xs text-muted-foreground">{r.detail}</p>
                               </div>
-                              <p className="mt-0.5 truncate text-xs text-muted-foreground">{r.detail}</p>
+                              <span className={`shrink-0 text-xs font-medium ${meta.text}`}>
+                                {meta.label}
+                              </span>
                             </div>
-                            <span className={`shrink-0 text-xs font-medium ${
-                              r.risk_level === "high"
-                                ? "text-red-600 dark:text-red-400"
-                                : "text-amber-600 dark:text-amber-400"
-                            }`}>
-                              {RISK_TYPE_LABELS[r.risk_type]}
-                            </span>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </CardContent>

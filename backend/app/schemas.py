@@ -383,8 +383,8 @@ WEIGHT_SCHEMES = {
 }
 
 # 风险阈值（规则页 SOP 同步维护）
-RISK_FLUCTUATION_PT = 30  # 份额波动预警：|本月 − 上期| ≥ 30 个百分点
-RISK_DEVIATION_PT = 5     # 建议偏差预警：|本月 − 上月建议| > 5 个百分点
+RISK_FLUCTUATION_RATIO = 0.3  # 份额波动预警：本月系统份额相对上期变化 ≥ ±30%（≥ 上期×1.3 或 ≤ 上期×0.7）
+RISK_DEVIATION_PT = 5         # 建议偏差预警：|本月 − 上月建议| > 5 个百分点
 
 
 class ShareRecordBase(BaseModel):
@@ -495,7 +495,7 @@ class ShareSummary(BaseModel):
     total_materials: int = 0          # 当月有记录的物料数
     total_relations: int = 0          # 当月记录条数
     sole_materials: int = 0           # 独供物料数（同项目同物料仅 1 家供应商）
-    fluctuation_alerts: int = 0       # 份额波动预警条数（|本月−上期|≥30pt）
+    fluctuation_alerts: int = 0       # 份额波动预警条数（相对上期变化 ≥ ±30%）
     deviation_alerts: int = 0         # 建议偏差预警条数（|本月−上月建议|>5pt）
     sticky_suppliers: int = 0         # 高粘性供应商数（当月覆盖物料数 ≥ 3）
 
@@ -588,3 +588,110 @@ class RuleListResponse(BaseModel):
 
     items: list[RuleRead]
     total: int
+
+
+# ---------------------------------------------------------------------------
+# 库存信号塔：动态库存与 DOH 风险监控看板（规则页「库存管理」SOP 同步维护）
+# ---------------------------------------------------------------------------
+INV_WINDOW_DAYS = 30            # 日度推算窗口（未来 30 天滚动）
+INV_COV_MID = 0.35              # 历史需求波动分档：COV < 0.35 低 / [0.35, 0.8) 中 / ≥ 0.8 高
+INV_COV_HI = 0.8
+INV_SAFE_DOH_DEFAULT = 5        # 目标安全天数（前端可调，默认 5 天：顶部漏斗「今日亮灯」即 DOH<5）
+INV_EXCESS_DOH_DEFAULT = 30     # 过剩库存天数（DOH > 该值 = 蓝灯积压，默认 30）
+INV_YELLOW_RATIO = 1.25         # 黄灯带 = 安全天数 × 100%~125%（DOH 贴近安全线）
+INV_MIN_HIST_MONTHS = 2         # 历史需求少于 2 个月不计算 COV
+
+# 预警状态（判定优先级从高到低，同一格只落一种）
+INV_STATUS_STOCKOUT = "stockout"   # 深红：期末库存 ≤ 0（已断货）
+INV_STATUS_RED = "red"             # 浅红：期末库存 < SS 或 DOH < 安全天数
+INV_STATUS_YELLOW = "yellow"       # 黄：DOH ∈ [安全, 安全×1.25)（贴近安全线）
+INV_STATUS_BLUE = "blue"           # 蓝：DOH > 过剩天数（积压）
+INV_STATUS_OK = "ok"               # 正常
+
+# 波动标签（供 KPI「高波动 SKU」与表格标签列使用）
+INV_COV_LABEL_HIGH = "high"
+INV_COV_LABEL_MID = "mid"
+INV_COV_LABEL_LOW = "low"
+INV_COV_LABEL_NA = "na"            # 历史数据不足（< 2 个月）
+
+
+class InventoryMonthQty(BaseModel):
+    """单个月份的需求量（历史或预测共用）。"""
+
+    m: str  # YYYY-MM
+    q: float
+
+
+class InventoryCellOut(BaseModel):
+    """推算单元在某一自然日的完整单元格（30 天矩阵一行日）。"""
+
+    date: str                     # YYYY-MM-DD
+    sys_demand: float             # 系统预测需求（摊日均，或已被 demand_override 覆盖）
+    sys_overridden: bool          # 系统预测格是否被手工改过
+    manual_demand: float          # 手工修正需求
+    manual_in: float              # 手工修正入库
+    ending: float                 # 期末库存（自动重算，或 ending_override 覆盖）
+    ending_overridden: bool       # 期末是否被直接覆盖
+    doh: float                    # 动态 DOH（0.1 天精度；> 窗口封顶 30）
+    doh_capped: bool              # DOH 是否超出窗口（显示 30+）
+    status: str                   # INV_STATUS_*
+    manual: bool                  # 该日是否有任一手工数据（三角标）
+
+
+class InventoryPlanOut(BaseModel):
+    """推算单元 + 30 天矩阵（页面主表一行的完整数据）。"""
+
+    id: int
+    project_id: int
+    project_code: str
+    project_name: str
+    base: str
+    material_id: int
+    pn: str
+    material_name: str
+    lead_time_days: float
+    on_hand: float
+    cov: float | None             # None = 历史数据不足
+    cov_label: str                # INV_COV_LABEL_*
+    avg_daily: float              # 未来窗口内日均需求（SS 基数）
+    ss: float                     # 动态安全库存数量
+    hist: list[InventoryMonthQty]
+    fcast: list[InventoryMonthQty]
+    days: list[InventoryCellOut]  # 长度 = 30（窗口随今天滚动）
+
+
+class InventorySummary(BaseModel):
+    """顶部 KPI 风险概览卡（当前筛选视图内，按物料 PN 去重；人工干预按手改单元格数）。"""
+
+    total_plans: int              # 当前视图推算单元（行）数
+    stockout_pns: int             # 断货高风险 SKU（PN 种类数）：未来 30 天存在 期末<SS 或 DOH<安全天数
+    irreversible_pns: int         # 不可逆断货预警（PN）：库存将归零且剩余覆盖天数 < LeadTime
+    high_cov_pns: int             # 高波动 SKU（PN）：COV ≥ 0.8
+    manual_cells: int             # 人工干预项：被手动修改过的单元格数（跨全部行）
+    today: str                    # 推算基准日（YYYY-MM-DD）
+
+
+class InventoryDayUpdate(BaseModel):
+    """单日单元格批量更新项（全格可编辑；值为 None 表示清空该覆盖字段）。"""
+
+    date: str                     # YYYY-MM-DD
+    demand_override: float | None = None   # 改系统预测需求格；None=不改动
+    manual_demand: float | None = None     # 改手工修正需求；None=不改动（0=清空）
+    manual_in: float | None = None         # 改手工修正入库；None=不改动（0=清空）
+    ending_override: float | None = None   # 直接改期末库存；None=不改动
+    doh_target: float | None = None        # 编辑 DOH 格：按目标天数反推所需期末库存（覆盖）
+
+
+class InventoryPlanUpdate(BaseModel):
+    """推算单元级更新（左冻结列：LeadTime / 初始现有库存 可双击改）。"""
+
+    lead_time_days: float | None = Field(None, gt=0)
+    on_hand: float | None = None
+
+
+class InventoryImportResult(BaseModel):
+    """Excel 导入结果。"""
+
+    imported: int = 0             # 新增推算单元
+    updated: int = 0              # 已存在被更新（系统数据刷新 + 手工修正清空重建）
+    errors: list[str] = []

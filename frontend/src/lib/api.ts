@@ -51,6 +51,14 @@ import type {
   ShareRiskItem,
   ShareSummary,
 } from "../types/share";
+import type {
+  InventoryDayUpdateInput,
+  InventoryFilter,
+  InventoryPlan,
+  InventoryPlanUpdateInput,
+  InventoryImportResult,
+  InventorySummary,
+} from "../types/inventory";
 
 /** Axios 实例：开发环境经 Vite 代理转发到后端，无需处理跨域 */
 export const apiClient = axios.create({
@@ -308,6 +316,35 @@ export const shareApi = {
   rollover(projectId: number, fromMonth: string, toMonth: string) {
     return apiClient
       .post<ShareSummary>("/share/rollover", null, { params: { project_id: projectId, from_month: fromMonth, to_month: toMonth } })
+      .then((res) => res.data);
+  },
+};
+
+export const inventoryApi = {
+  /** 推算单元列表（含 30 天矩阵；safe/excess 影响预警判定） */
+  plans(filters: InventoryFilter = {}) {
+    return apiClient.get<InventoryPlan[]>("/inventory/plans", { params: filters }).then((res) => res.data);
+  },
+
+  /** 顶部 KPI 四卡（当前筛选视图，按 PN 去重） */
+  summary(filters: InventoryFilter = {}) {
+    return apiClient.get<InventorySummary>("/inventory/summary", { params: filters }).then((res) => res.data);
+  },
+
+  /** 改 LeadTime / 初始现有库存（左冻结列） */
+  updatePlan(id: number, data: InventoryPlanUpdateInput) {
+    return apiClient.patch<InventoryPlan>(`/inventory/plans/${id}`, data).then((res) => res.data);
+  },
+
+  /** 批量改某日单元格（落库即重算，返回整行新矩阵） */
+  updateDays(id: number, cells: InventoryDayUpdateInput[]) {
+    return apiClient.put<InventoryPlan>(`/inventory/plans/${id}/days`, cells).then((res) => res.data);
+  },
+
+  /** Excel 导入（服务端本地文件路径） */
+  importExcel(filePath: string) {
+    return apiClient
+      .post<InventoryImportResult>("/inventory/import", null, { params: { file_path: filePath } })
       .then((res) => res.data);
   },
 };

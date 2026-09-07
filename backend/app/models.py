@@ -276,3 +276,64 @@ class Rule(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="排序（同 module 内升序）")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class InventoryPlan(Base):
+    """库存信号塔：动态库存与 DOH 风险监控看板 —— 推算单元（项目 × 基地 × 物料）。
+
+    一个推算单元 = 一条 SKU-基地 链：初始现有库存 + 采购提前期 + 历史需求（算 COV）+
+    未来预测需求（月度值，服务端按自然日摊日均）→ 30 天日度滚动推算。
+
+    UNIQUE(project_id, base, material_id)：同一项目同一基地同一物料只有一条计划。
+    手工修正（逐日 demand_override / manual_demand / manual_in / ending_override）
+    落在 InventoryDay 表（按具体日期存，滚动窗口不错位）。
+    口径与公式见规则页「库存管理」SOP。
+    """
+
+    __tablename__ = "inventory_plans"
+    __table_args__ = (UniqueConstraint("project_id", "base", "material_id", name="uq_inventory_project_base_material"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    base: Mapped[str] = mapped_column(String(100), nullable=False, comment="基地名称（随 Excel 导入，不单独维护基地表）")
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False, index=True)
+    lead_time_days: Mapped[float] = mapped_column(Float, nullable=False, default=7, comment="采购提前期（天），参与安全库存与不可逆断货判定")
+    on_hand: Mapped[float] = mapped_column(Float, nullable=False, default=0, comment="初始现有库存（推算窗口 T0 期初）")
+    hist_json: Mapped[str | None] = mapped_column(Text, nullable=True, comment="历史需求 JSON：[{m:'YYYY-MM', q:数量}, ...]（算 COV，几列算几列）")
+    fcast_json: Mapped[str | None] = mapped_column(Text, nullable=True, comment="未来预测需求 JSON：[{m:'YYYY-MM', q:月度总量}, ...]（摊日均）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    project: Mapped[Project] = relationship()
+    material: Mapped["Material"] = relationship()
+    days: Mapped[list["InventoryDay"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class InventoryDay(Base):
+    """库存信号塔：某推算单元的某自然日的手工修正与覆盖数据。
+
+    系统预测需求不落库（由未来预测月度值按自然日摊日均实时生成）；
+    本表只存「人改过」的东西，无记录 = 全系统值。UNIQUE(plan_id, date) 按具体日期钉住，
+    30 天窗口随今天滚动时手工修正不会错位。
+      - demand_override  直接改写该日系统预测需求（覆盖摊日均）
+      - manual_demand    手工修正需求（在系统预测之上追加，可正可负）
+      - manual_in        手工修正入库（当天到货入库量，可正可负）
+      - ending_override  直接覆盖该日期末库存（盘点/实际差异；后续日基于它重算）
+    """
+
+    __tablename__ = "inventory_days"
+    __table_args__ = (UniqueConstraint("plan_id", "date", name="uq_inventory_plan_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("inventory_plans.id", ondelete="CASCADE"), nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True, comment="自然日（窗口随今天滚动，手工修正按日钉住）")
+    demand_override: Mapped[float | None] = mapped_column(Float, nullable=True, comment="系统预测需求覆盖值（改过系统预测格才落库）")
+    manual_demand: Mapped[float] = mapped_column(Float, nullable=False, default=0, comment="手工修正需求")
+    manual_in: Mapped[float] = mapped_column(Float, nullable=False, default=0, comment="手工修正入库")
+    ending_override: Mapped[float | None] = mapped_column(Float, nullable=True, comment="期末库存覆盖（直接改过期末格才落库）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    plan: Mapped[InventoryPlan] = relationship(back_populates="days")

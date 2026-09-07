@@ -2,7 +2,7 @@
 
 通过真实 API 造两月份额数据，覆盖：
 - 独供（同项目同物料仅 1 家）跨 3 个项目；
-- 份额波动（|本月 − 上期| ≥ 30pt）跨 2 个项目；
+- 份额波动（本月相对上期变化 ≥ ±30%）跨 2 个项目；
 - 稳定物料不波动，用于对照。
 
 执行前会清空 share_records 表（请确保已备份 products.db）。
@@ -109,15 +109,15 @@ def main() -> None:
     print("\n===== /api/share/dashboard-stats =====")
     print(json.dumps(stats, ensure_ascii=False, indent=2))
 
-    # 5) 断言关键值
+    # 5) 断言关键值（口径：顶层 = 按物料 PN 去重的物料数；by_project = 记录级预警条数，与份额页 KPI/排行同口径）
     assert stats["month"] == "2026-09", f"最新月应为 2026-09，实际 {stats['month']}"
     assert stats["fluctuation_materials"] == 2, f"波动物料应为 2，实际 {stats['fluctuation_materials']}"
     assert stats["sole_materials"] == 7, f"独供物料应为 7，实际 {stats['sole_materials']}"
     by_project = {b["project_id"]: b for b in stats["by_project"]}
-    assert by_project[1]["fluctuation_materials"] == 1 and by_project[1]["sole_materials"] == 3, "项目1 波动1/独供3"
-    assert by_project[2]["fluctuation_materials"] == 1 and by_project[2]["sole_materials"] == 2, "项目2 波动1/独供2"
+    assert by_project[1]["fluctuation_materials"] == 2 and by_project[1]["sole_materials"] == 3, "项目1 波动2条/独供3"
+    assert by_project[2]["fluctuation_materials"] == 2 and by_project[2]["sole_materials"] == 2, "项目2 波动2条/独供2"
     assert by_project[3]["fluctuation_materials"] == 0 and by_project[3]["sole_materials"] == 2, "项目3 波动0/独供2"
-    print("\n✓ 全部断言通过：波动 2（跨 2 项目）、独供 7（跨 3 项目）、by_project 分组正确")
+    print("\n✓ 全部断言通过：顶层波动物料 2（PN 去重）、独供物料 7（PN 去重）；by_project 波动为记录级预警条数（1 个物料 2 家供应商波动 = 2 条）")
 
 
 if __name__ == "__main__":

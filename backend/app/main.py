@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .database import Base, engine
-from .routers import materials, products, projects, rules, share, suppliers, supply_relations
+from .routers import inventory, materials, products, projects, rules, share, suppliers, supply_relations
 # 暂不写入演示数据，保留空白底表
 # from .seed import seed_materials, seed_products, seed_projects, seed_suppliers
 
@@ -57,6 +57,7 @@ app.include_router(supply_relations.router)
 app.include_router(projects.router)
 app.include_router(rules.router)
 app.include_router(share.router)
+app.include_router(inventory.router)
 
 
 # ---------------------------------------------------------------------------

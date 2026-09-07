@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import DashboardPage from "./pages/DashboardPage";
+import InventoryPage from "./pages/InventoryPage";
 import ProductsPage from "./pages/ProductsPage";
 import ProjectSupplyDetailPage from "./pages/ProjectSupplyDetailPage";
 import RulesPage from "./pages/RulesPage";
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/supply-demand/projects/:projectId" element={<ProjectSupplyDetailPage />} />
         <Route path="/share" element={<SharePage />} />
         <Route path="/share/records" element={<ShareRecordsPage />} />
+        <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/rules" element={<RulesPage />} />
         {/* 旧项目页已并入供应管理 */}
         <Route path="/projects" element={<Navigate to="/materials" replace />} />

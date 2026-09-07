@@ -16,7 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", to: "/dashboard" },
   { label: "供需管理", to: "/supply-demand" },
   { label: "份额管理", to: "/share" },
-  { label: "库存管理" },
+  { label: "库存管理", to: "/inventory" },
   { label: "变更管理" },
   { label: "供应商列表", to: "/materials" },
   { label: "规则", to: "/rules" },

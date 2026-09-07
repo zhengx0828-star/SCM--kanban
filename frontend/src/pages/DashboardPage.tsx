@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
-import { FolderKanban, Plus, RefreshCw, ShieldAlert, Timer, TrendingUp } from "lucide-react";
+import { FolderKanban, MapPin, Plus, RefreshCw, ShieldAlert, Timer, TrendingUp, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -67,6 +67,33 @@ export default function DashboardPage() {
   const { data: shareStats, isLoading: shareStatsLoading } = useShareDashboardStats();
   const [formOpen, setFormOpen] = useState(false);
   const [selected, setSelected] = useState<Supplier | null>(null);
+  /* 地图取点录入：pickMode = 取点模式；preset = 最近一次取点的省份 + 坐标（打开弹窗时预填） */
+  const [pickMode, setPickMode] = useState(false);
+  const [preset, setPreset] = useState<{ city: string; longitude: number; latitude: number } | null>(null);
+
+  /* Esc 取消取点模式 */
+  useEffect(() => {
+    if (!pickMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPickMode(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pickMode]);
+
+  /** 打开「录入供应商」弹窗（普通模式：不带取点预填） */
+  const openPlainForm = () => {
+    setPickMode(false);
+    setPreset(null);
+    setFormOpen(true);
+  };
+
+  /** 地图取点成功：带出省份 + 坐标并打开录入弹窗 */
+  const handleMapPick = (pt: { longitude: number; latitude: number; province: string }) => {
+    setPickMode(false);
+    setPreset({ city: pt.province, longitude: pt.longitude, latitude: pt.latitude });
+    setFormOpen(true);
+  };
 
   /* ---- 地图项目切片器 ---- */
   // 切片器项目列表（page_size=100，与供应商列表「项目」Tab 同源联动）
@@ -108,7 +135,7 @@ export default function DashboardPage() {
       {
         label: "份额波动物料",
         value: (shareStats?.fluctuation_materials ?? 0).toLocaleString(),
-        hint: shareStats?.month ? `${shareStats.month} 波动 ≥ 30pt` : "暂无份额数据",
+        hint: shareStats?.month ? `${shareStats.month} 波动：相对上月变化 ≥ ±30%` : "暂无份额数据",
         icon: TrendingUp,
         chip: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
         onClick: () =>
@@ -210,17 +237,48 @@ export default function DashboardPage() {
                           ))}
                         </div>
                       )}
-                      <Button size="sm" onClick={() => setFormOpen(true)}>
+                      <Button
+                        size="sm"
+                        variant={pickMode ? "default" : "outline"}
+                        onClick={() => {
+                          setFormOpen(false);
+                          setPickMode((v) => !v);
+                        }}
+                      >
+                        <MapPin className="mr-1.5 h-4 w-4" />
+                        地图选点
+                      </Button>
+                      <Button size="sm" onClick={openPlainForm}>
                         <Plus className="mr-1.5 h-4 w-4" />
                         录入供应商
                       </Button>
                     </div>
                   </div>
-                  <div className="h-[600px] p-2 sm:h-[680px]">
+                  <div className="relative h-[600px] p-2 sm:h-[680px]">
+                    {/* 取点模式提示条 */}
+                    {pickMode && (
+                      <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-4">
+                        <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background px-4 py-2 text-xs shadow-sm">
+                          <MapPin className="h-3.5 w-3.5 shrink-0 text-primary" />
+                          点击地图选择供应商所在位置，自动带出省份与坐标
+                          <button
+                            type="button"
+                            aria-label="取消选点"
+                            onClick={() => setPickMode(false)}
+                            className="rounded p-0.5 transition-colors hover:bg-muted"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     <ChinaMap
                       className="h-full w-full"
-                      suppliers={mapSuppliers}
+                      // 取点模式下隐藏供应商散点：避免点位遮住目标区域/点击散点无响应，取点更清爽
+                      suppliers={pickMode ? [] : mapSuppliers}
+                      pickMode={pickMode}
                       onSupplierClick={(s) => setSelected(s)}
+                      onMapPick={handleMapPick}
                     />
                   </div>
                 </CardContent>
@@ -235,8 +293,8 @@ export default function DashboardPage() {
         </main>
       </div>
 
-      {/* 录入弹窗：选了项目时，候选供应商限定为该项目下已挂载的 */}
-      <SupplierFormDialog open={formOpen} onOpenChange={setFormOpen} project={sliceProject ?? null} />
+      {/* 录入弹窗：选了项目时，候选供应商限定为该项目下已挂载的；地图选点后自动预填省份/坐标 */}
+      <SupplierFormDialog open={formOpen} onOpenChange={setFormOpen} project={sliceProject ?? null} preset={preset} />
       {/* 点位详情弹窗 */}
       <SupplierDetailDialog supplier={selected} onClose={() => setSelected(null)} />
     </div>

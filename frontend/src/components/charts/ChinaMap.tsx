@@ -13,6 +13,10 @@ import { RISK_META, RISK_ORDER, riskKeyOf, type Supplier, type SupplierRiskKey }
  * 供应商点位：以 scatter 散点叠加在地图上，按风险等级着色（红/黄/绿/灰=未评估），
  * 点击点位通过 onSupplierClick 回调暴露供应商 id。
  *
+ * pickMode（地图取点）：为「录入供应商」服务——开启后点击地图任意行政区，
+ * 通过 convertFromPixel 反算点击坐标（经纬度），并从区域名识别省份，经 onMapPick 回调返回。
+ * 点击海洋等区域外（无行政区名）不响应。
+ *
  * 地图不展示任何省份维度的演示数据——只显示真实录入的供应商点位。
  *
  * 刷新机制：地图实例只初始化一次（跟随主题重建），suppliers 变化时仅增量更新散点系列，
@@ -181,16 +185,46 @@ interface ChinaMapProps {
   suppliers?: Supplier[];
   /** 点击供应商点位回调 */
   onSupplierClick?: (supplier: Supplier) => void;
+  /** 地图取点模式：开启后点击地图行政区返回经纬度 + 省份（供录入供应商预填） */
+  pickMode?: boolean;
+  /** 取点结果回调（经纬度 + 省份名，省份已去掉省/市/自治区等后缀） */
+  onMapPick?: (point: { longitude: number; latitude: number; province: string }) => void;
 }
 
-export function ChinaMap({ className, suppliers = [], onSupplierClick }: ChinaMapProps) {
+/** 地图行政区名 → 供应商 city 常用名（去掉省/市/自治区等后缀；港澳台保留规范前缀） */
+const PROVINCE_SUFFIX_RE = /壮族自治区|回族自治区|维吾尔自治区|特别行政区|自治区|省|市$/;
+const REGION_ALIAS: Record<string, string> = {
+  台湾: "中国台湾",
+  香港: "中国香港",
+  澳门: "中国澳门",
+};
+function normalizeProvince(raw?: string): string {
+  if (!raw) return "";
+  const n = raw.trim().replace(PROVINCE_SUFFIX_RE, "");
+  return REGION_ALIAS[n] ?? n;
+}
+
+export function ChinaMap({ className, suppliers = [], onSupplierClick, pickMode = false, onMapPick }: ChinaMapProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { dark } = useTheme();
   const onClickRef = useRef(onSupplierClick);
   onClickRef.current = onSupplierClick;
+  const onPickRef = useRef(onMapPick);
+  onPickRef.current = onMapPick;
+  const pickModeRef = useRef(pickMode);
+  pickModeRef.current = pickMode;
   const suppliersRef = useRef(suppliers);
   suppliersRef.current = suppliers;
   const geoReadyRef = useRef(false);
+
+  /* 取点模式下鼠标呈十字准星 */
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const chart = echarts.getInstanceByDom(el);
+    if (!chart) return;
+    chart.getDom().style.cursor = pickMode ? "crosshair" : "";
+  }, [pickMode]);
 
   /* 初始化地图实例（仅依赖主题，dark 变化时整图重建以匹配主题色） */
   useEffect(() => {
@@ -203,7 +237,32 @@ export function ChinaMap({ className, suppliers = [], onSupplierClick }: ChinaMa
     const attachClick = () => {
       chart.off("click");
       chart.on("click", (params: unknown) => {
-        const p = params as { componentType?: string; seriesType?: string; data?: { supplierId?: number } };
+        const p = params as {
+          componentType?: string;
+          seriesType?: string;
+          name?: string;
+          event?: { offsetX?: number; offsetY?: number };
+          data?: { supplierId?: number };
+        };
+        // 取点模式：点击地图行政区 → 反算经纬度 + 省份
+        if (pickModeRef.current) {
+          if (p.componentType !== "geo") return; // 只响应省份区域（点击散点/海洋不取点）
+          const province = normalizeProvince(p.name);
+          if (!province) return; // 海洋等区域外无行政区名
+          const e = p.event;
+          if (e?.offsetX == null || e?.offsetY == null) return;
+          const coord = chart.convertFromPixel({ geoIndex: 0 }, [e.offsetX, e.offsetY]);
+          if (!Array.isArray(coord)) return;
+          const lng = Number(coord[0]);
+          const lat = Number(coord[1]);
+          if (lng < 73 || lng > 135 || lat < 3 || lat > 54) return;
+          onPickRef.current?.({
+            longitude: Math.round(lng * 10000) / 10000,
+            latitude: Math.round(lat * 10000) / 10000,
+            province,
+          });
+          return;
+        }
         if (p.componentType === "series" && p.seriesType === "scatter" && p.data?.supplierId != null) {
           const supplier = suppliersRef.current.find((s) => s.id === p.data!.supplierId);
           if (supplier) onClickRef.current?.(supplier);
@@ -218,6 +277,7 @@ export function ChinaMap({ className, suppliers = [], onSupplierClick }: ChinaMa
         // 使用最新的 suppliers（防止 suppliers 早于地图加载完成的时序）
         chart.setOption(buildOption(dark, suppliersRef.current), true);
         attachClick();
+        chart.getDom().style.cursor = pickModeRef.current ? "crosshair" : "";
         geoReadyRef.current = true;
       })
       .catch(() => {

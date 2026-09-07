@@ -123,7 +123,7 @@ export interface ShareImportResult {
   errors: string[];
 }
 
-/** 份额首页项目卡片标注：单项目的波动/独供物料数（最新数据月口径） */
+/** 份额首页项目卡片标注：单项目波动/独供「预警条数」（记录级、与 KPI/风险排行同口径；按最新数据月统计） */
 export interface ShareProjectRiskBrief {
   project_id: number;
   code: string;
@@ -146,4 +146,19 @@ export const RISK_TYPE_LABELS: Record<ShareRiskItem["risk_type"], string> = {
   fluctuation: "份额波动",
   deviation: "建议偏差",
   mismatch: "份额×评分错配",
+};
+
+/**
+ * 风险类型配色（KPI 卡 / 项目卡 chip / 风险排行条目共用一套，避免上下对不上）：
+ * 独供=红（高优先），份额波动 / 建议偏差=琥珀（关注），份额×评分错配=紫。
+ * 排行条目按此着色（不再按 risk_level 上色）。
+ */
+export const RISK_TYPE_META: Record<
+  ShareRiskItem["risk_type"],
+  { label: string; rowBg: string; dot: string; text: string; hex: string }
+> = {
+  sole: { label: "独供风险", rowBg: "bg-red-500/10", dot: "bg-red-500", text: "text-red-600 dark:text-red-400", hex: "#ef4444" },
+  fluctuation: { label: "份额波动", rowBg: "bg-amber-500/10", dot: "bg-amber-500", text: "text-amber-600 dark:text-amber-400", hex: "#f59e0b" },
+  deviation: { label: "建议偏差", rowBg: "bg-amber-500/10", dot: "bg-amber-500", text: "text-amber-600 dark:text-amber-400", hex: "#f59e0b" },
+  mismatch: { label: "份额×评分错配", rowBg: "bg-violet-500/10", dot: "bg-violet-500", text: "text-violet-600 dark:text-violet-400", hex: "#8b5cf6" },
 };

@@ -8,8 +8,10 @@
 - 计算配额 = 加权分 ÷ Σ(同项目同物料加权分)
 - 建议配额 = 计算配额四舍五入取整（整数百分比）；99%/101% 偏差可接受，不补齐
 - 独供 = 同项目同物料仅 1 家供应商（自动推导）
-- 份额波动预警：|本月系统份额 − 上期份额| ≥ 30 个百分点
+- 份额波动预警：本月系统份额相对上期变化 ≥ ±30%（≥ 上期×1.3 或 ≤ 上期×0.7；上期为 0 时本月从无到有视为波动）
 - 建议偏差预警：|本月系统份额 − 上月建议配额| > 5 个百分点
+- 风险归类口径：一条记录可能命中多种风险，只归入最高优先级一类（独供 > 波动 > 偏差 > 错配），
+  KPI 卡计数、项目卡标注与风险排行三者同口径（保证数字一一对应）
 - 多基地份额：每条记录 self-contained 的 [{base, share, lines}]；
   份额 = Σ(基地份额 × 基地拉线数) ÷ Σ(基地拉线数)（基地份额约定 0-1 小数，
   全部 ≤1 时视为小数口径 ×100，自动按比例归一为 %）。
@@ -39,7 +41,7 @@ from ..models import Material, Project, ShareRecord, Supplier, SupplyRelation
 from ..schemas import (
     QDC_SCORES,
     RISK_DEVIATION_PT,
-    RISK_FLUCTUATION_PT,
+    RISK_FLUCTUATION_RATIO,
     WEIGHT_SCHEMES,
     ShareImportResult,
     ShareQuadrantPoint,
@@ -175,6 +177,99 @@ def _recompute_project_material(db: Session, project_id: int, material_id: int, 
     db.flush()
 
 
+def _is_fluctuation(current: Optional[float], prev: Optional[float]) -> bool:
+    """份额波动预警：本月系统份额相对上期变化 ≥ ±30%（规则页 SOP 同步维护）。
+
+    - current / prev 任一为空（如无上月记录）→ 不判定（新供应商首月不误报）；
+    - prev == 0：本月从无到有（>0）视为重大变化触发；本月仍为 0 无变化不触发；
+    - 否则：cur ≥ prev × 1.3（涨）或 cur ≤ prev × 0.7（跌）即触发。
+    """
+    if current is None or prev is None:
+        return False
+    if prev == 0:
+        return current > 0
+    return current >= prev * (1 + RISK_FLUCTUATION_RATIO) or current <= prev * (1 - RISK_FLUCTUATION_RATIO)
+
+
+def _fluctuation_detail(current: float, prev: float) -> str:
+    """份额波动风险条目的 detail 文案（方向化）。"""
+    if prev == 0:
+        return f"份额波动：上期为 0，本月新供 {current:g}%（从无到有）"
+    pct = (current - prev) / prev * 100
+    direction = "涨" if pct > 0 else "跌"
+    return f"份额波动：{prev:g}% → {current:g}%（{direction} {abs(pct):.1f}%，相对变化 ≥ ±30%）"
+
+
+def _is_mismatch(record: ShareRecord) -> bool:
+    """份额×评分错配：份额 ≥ 50% 且加权分 < 0.5（最差的拿最多活）。"""
+    return (
+        record.share_current is not None
+        and record.share_current >= 50
+        and record.weighted_score is not None
+        and record.weighted_score < 0.5
+    )
+
+
+def _risk_chain_type(record: ShareRecord) -> Optional[str]:
+    """该记录的最高优先级风险类型（sole/fluctuation/deviation/mismatch），无风险返回 None。
+
+    口径（规则页「份额管理 · 风险归类」同步维护）：一条记录可能同时命中多种风险
+    （如既波动又偏差），只归入最高优先级一类：独供 > 波动 > 偏差 > 错配。
+    KPI 卡计数、项目卡标注、风险排行三者都用此函数，保证页面数字一一对应。
+    """
+    if record.is_sole:
+        return "sole"
+    if _is_fluctuation(record.share_current, record.share_prev):
+        return "fluctuation"
+    if (
+        record.share_current is not None
+        and record.quota_prev is not None
+        and abs(record.share_current - record.quota_prev) > RISK_DEVIATION_PT
+    ):
+        return "deviation"
+    if _is_mismatch(record):
+        return "mismatch"
+    return None
+
+
+# 风险类型 → 级别：独供 / 波动 = 高优先级（排行靠前），偏差 / 错配 = 关注
+_RISK_TYPE_LEVEL = {"sole": "high", "fluctuation": "high", "deviation": "medium", "mismatch": "medium"}
+
+
+def _risk_item(record: ShareRecord, project_id: int) -> Optional[ShareRiskItem]:
+    """按最高优先级归类，构造风险排行条目；无风险返回 None。"""
+    risk_type = _risk_chain_type(record)
+    if risk_type is None:
+        return None
+    rel = record.supply_relation
+    pn = rel.material.pn if rel.material else ""
+    mname = rel.material.name if rel.material else ""
+    sname = rel.supplier.name if rel.supplier else ""
+    scode = rel.supplier.code if rel.supplier else ""
+    if risk_type == "sole":
+        detail = "独供：同项目同物料仅此一家供应商"
+    elif risk_type == "fluctuation":
+        detail = _fluctuation_detail(record.share_current or 0, record.share_prev or 0)
+    elif risk_type == "deviation":
+        detail = f"建议偏差 {abs(record.share_current - record.quota_prev):.0f}pt > {RISK_DEVIATION_PT}pt"
+    else:
+        detail = "份额高但评分低（份额×评分错配）"
+    return ShareRiskItem(
+        record_id=record.id,
+        project_id=project_id,
+        pn=pn,
+        material_name=mname,
+        supplier_name=sname,
+        supplier_code=scode,
+        share_current=record.share_current,
+        share_prev=record.share_prev,
+        weighted_score=record.weighted_score,
+        risk_type=risk_type,
+        risk_level=_RISK_TYPE_LEVEL[risk_type],
+        detail=detail,
+    )
+
+
 def _to_read(record: ShareRecord) -> ShareRecordRead:
     """ORM → 视图（含派生风险信号）。"""
     rel = record.supply_relation
@@ -183,11 +278,7 @@ def _to_read(record: ShareRecord) -> ShareRecordRead:
 
     bases = _parse_bases(record.bases)
     risk_sole = record.is_sole
-    risk_fluctuation = bool(
-        record.share_current is not None
-        and record.share_prev is not None
-        and abs(record.share_current - record.share_prev) >= RISK_FLUCTUATION_PT
-    )
+    risk_fluctuation = _is_fluctuation(record.share_current, record.share_prev)
     risk_deviation = bool(
         record.share_current is not None
         and record.quota_prev is not None
@@ -261,12 +352,14 @@ def share_projects(db: Session = Depends(get_db)) -> list[dict]:
 
 @router.get("/dashboard-stats", response_model=dict, summary="Dashboard 联动：份额波动 / 重点独供 汇总（跨项目、最新月）")
 def share_dashboard_stats(db: Session = Depends(get_db)) -> dict:
-    """Dashboard 顶部统计卡数据源。
+    """Dashboard 顶部统计卡 + 份额页项目卡标注 的数据源。
 
     - 取「最新有份额数据的月份」；
-    - 份额波动物料数：跨全部项目，|本月 − 上期| ≥ 30pt 的物料数（按物料 PN 去重）；
-    - 重点物料独供数量：跨全部项目，独供（同项目同物料仅 1 家）的物料数（按物料 PN 去重）；
-    - by_project：按项目分组的波动/独供物料数（供份额首页项目卡片标注）。
+    - 顶层 fluctuation_materials / sole_materials：跨全部项目、**按物料 PN 去重**的物料数
+      （Dashboard 顶部卡语义 = 物料数）；
+    - by_project：**按记录计数、与份额页 KPI/风险排行同口径**（每条记录只归最高优先级风险）
+      —— 供份额页项目卡「波动 N / 独供 M」chip 与 Dashboard 点击自动定位使用，
+      保证选中项目后 chip 数字 = KPI 卡 = 风险排行对应筛选条数。
     """
     latest_month = db.execute(select(func.max(ShareRecord.month))).scalar_one_or_none()
     if latest_month is None:
@@ -274,12 +367,13 @@ def share_dashboard_stats(db: Session = Depends(get_db)) -> dict:
 
     records = _load_all_records(db, latest_month)
 
+    # 顶层：跨项目按物料 PN 去重（Dashboard 卡 = 波动物料 / 独供物料 的种数）
     fluctuation_pns: set[str] = set()
     sole_pns: set[str] = set()
-    # 项目信息 + 项目内按 PN 去重的波动/独供集合
+    # by_project：记录级（同口径链式归类），供项目卡 chip / 自动定位
     project_info: dict[int, tuple[str, str]] = {}
-    per_project_fluct: dict[int, set[str]] = defaultdict(set)
-    per_project_sole: dict[int, set[str]] = defaultdict(set)
+    per_project_fluct: dict[int, int] = defaultdict(int)
+    per_project_sole: dict[int, int] = defaultdict(int)
 
     for r in records:
         rel = r.supply_relation
@@ -294,22 +388,21 @@ def share_dashboard_stats(db: Session = Depends(get_db)) -> dict:
             )
         if r.is_sole:
             sole_pns.add(pn)
-            per_project_sole[pid].add(pn)
-        if (
-            r.share_current is not None
-            and r.share_prev is not None
-            and abs(r.share_current - r.share_prev) >= RISK_FLUCTUATION_PT
-        ):
+        if _is_fluctuation(r.share_current, r.share_prev):
             fluctuation_pns.add(pn)
-            per_project_fluct[pid].add(pn)
+        risk_type = _risk_chain_type(r)
+        if risk_type == "sole":
+            per_project_sole[pid] += 1
+        elif risk_type == "fluctuation":
+            per_project_fluct[pid] += 1
 
     by_project = [
         {
             "project_id": pid,
             "code": project_info[pid][0],
             "name": project_info[pid][1],
-            "fluctuation_materials": len(per_project_fluct[pid]),
-            "sole_materials": len(per_project_sole[pid]),
+            "fluctuation_materials": per_project_fluct[pid],
+            "sole_materials": per_project_sole[pid],
         }
         for pid in sorted(project_info)
     ]
@@ -341,26 +434,25 @@ def share_summary(
 ) -> ShareSummary:
     records = _load_records(db, project_id, month)
     project = db.get(Project, project_id)
-    # 按物料分组
+    # 按物料分组（口径说明：total_materials / sticky 用物料维度）
     by_material: dict[int, list[ShareRecord]] = defaultdict(list)
     for r in records:
         by_material[r.supply_relation.material_id].append(r)
 
-    sole_materials = sum(1 for rows in by_material.values() if len(rows) == 1)
-    fluctuation_alerts = sum(
-        1
-        for r in records
-        if r.share_current is not None
-        and r.share_prev is not None
-        and abs(r.share_current - r.share_prev) >= RISK_FLUCTUATION_PT
-    )
-    deviation_alerts = sum(
-        1
-        for r in records
-        if r.share_current is not None
-        and r.quota_prev is not None
-        and abs(r.share_current - r.quota_prev) > RISK_DEVIATION_PT
-    )
+    # 风险计数与风险排行同口径：每条记录只归入最高优先级风险（_risk_chain_type），
+    # 保证 KPI 卡数字 = 风险排行对应筛选的条数（不再独立累加造成重复计数）
+    sole_materials = 0
+    fluctuation_alerts = 0
+    deviation_alerts = 0
+    for r in records:
+        risk_type = _risk_chain_type(r)
+        if risk_type == "sole":
+            sole_materials += 1
+        elif risk_type == "fluctuation":
+            fluctuation_alerts += 1
+        elif risk_type == "deviation":
+            deviation_alerts += 1
+        # mismatch 无 KPI 卡，不入卡计数
     # 高粘性供应商：当月覆盖物料数 ≥ 3
     supplier_material_count: dict[int, set[int]] = defaultdict(set)
     for r in records:
@@ -388,36 +480,12 @@ def share_risks(
     db: Session = Depends(get_db),
 ) -> list[ShareRiskItem]:
     records = _load_records(db, project_id, month)
+    # 每条记录只归入最高优先级风险（独供 > 波动 > 偏差 > 错配），与 KPI 卡计数同口径
     items: list[ShareRiskItem] = []
-
     for r in records:
-        rel = r.supply_relation
-        pn = rel.material.pn if rel.material else ""
-        mname = rel.material.name if rel.material else ""
-        sname = rel.supplier.name if rel.supplier else ""
-        scode = rel.supplier.code if rel.supplier else ""
-        # 错配：份额 ≥ 50% 且加权分 < 0.5（最差的拿最多活）
-        mismatch = r.share_current is not None and r.share_current >= 50 and r.weighted_score is not None and r.weighted_score < 0.5
-
-        if r.is_sole:
-            items.append(ShareRiskItem(record_id=r.id, project_id=project_id, pn=pn, material_name=mname, supplier_name=sname, supplier_code=scode,
-                                       share_current=r.share_current, share_prev=r.share_prev, weighted_score=r.weighted_score,
-                                       risk_type="sole", risk_level="high", detail="独供：同项目同物料仅此一家供应商"))
-        elif r.share_current is not None and r.share_prev is not None and abs(r.share_current - r.share_prev) >= RISK_FLUCTUATION_PT:
-            items.append(ShareRiskItem(record_id=r.id, project_id=project_id, pn=pn, material_name=mname, supplier_name=sname, supplier_code=scode,
-                                       share_current=r.share_current, share_prev=r.share_prev, weighted_score=r.weighted_score,
-                                       risk_type="fluctuation", risk_level="high",
-                                       detail=f"份额波动 {abs(r.share_current - r.share_prev):.0f}pt ≥ 30pt"))
-        elif r.share_current is not None and r.quota_prev is not None and abs(r.share_current - r.quota_prev) > RISK_DEVIATION_PT:
-            items.append(ShareRiskItem(record_id=r.id, project_id=project_id, pn=pn, material_name=mname, supplier_name=sname, supplier_code=scode,
-                                       share_current=r.share_current, share_prev=r.share_prev, weighted_score=r.weighted_score,
-                                       risk_type="deviation", risk_level="medium",
-                                       detail=f"建议偏差 {abs(r.share_current - r.quota_prev):.0f}pt > 5pt"))
-        elif mismatch:
-            items.append(ShareRiskItem(record_id=r.id, project_id=project_id, pn=pn, material_name=mname, supplier_name=sname, supplier_code=scode,
-                                       share_current=r.share_current, share_prev=r.share_prev, weighted_score=r.weighted_score,
-                                       risk_type="mismatch", risk_level="medium",
-                                       detail="份额高但评分低（份额×评分错配）"))
+        item = _risk_item(r, project_id)
+        if item is not None:
+            items.append(item)
 
     # 排序：high 在前，同级别按份额倒序
     items.sort(key=lambda x: (0 if x.risk_level == "high" else 1, -(x.share_current or 0)))

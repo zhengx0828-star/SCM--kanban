@@ -199,10 +199,12 @@ interface SupplierFormDialogProps {
   onOpenChange: (open: boolean) => void;
   /** 若传入项目，弹窗「搜索供应商」候选列表只显示该项目下已挂载的供应商（不显示全部底表） */
   project?: Pick<Project, "id" | "code" | "name"> | null;
+  /** 地图取点预填：省份 + 坐标（每次打开弹窗时应用，覆盖默认空值） */
+  preset?: { city: string; longitude: number; latitude: number } | null;
 }
 
 /** 供应商地图录入弹窗：录入/补全供应商主数据 + 地图字段，点位自动刷新。物料-供应商关联在「供应关系」维护。 */
-export function SupplierFormDialog({ open, onOpenChange, project = null }: SupplierFormDialogProps) {
+export function SupplierFormDialog({ open, onOpenChange, project = null, preset = null }: SupplierFormDialogProps) {
   const createMutation = useCreateSupplier();
   const updateMutation = useUpdateSupplier();
   const { data: allSuppliers = [] } = useSuppliers();
@@ -230,13 +232,18 @@ export function SupplierFormDialog({ open, onOpenChange, project = null }: Suppl
   const city = watch("city");
   const name = watch("name");
 
-  /* 弹窗打开时重置（项目上下文变化时也重置，避免跨项目串数据） */
+  /* 弹窗打开时重置（项目上下文/取点预填变化时也重置，避免跨项目串数据） */
   useEffect(() => {
     if (!open) return;
     setSubmitError(null);
     setExistingSupplierId(null);
-    reset(DEFAULT_VALUES);
-  }, [open, project?.id, reset]);
+    reset({
+      ...DEFAULT_VALUES,
+      city: preset?.city ?? "",
+      longitude: preset?.longitude ?? 0,
+      latitude: preset?.latitude ?? 0,
+    });
+  }, [open, project?.id, preset, reset]);
 
   const supplierItems = useMemo(
     () =>
@@ -452,7 +459,11 @@ export function SupplierFormDialog({ open, onOpenChange, project = null }: Suppl
             {city && (
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
                 <MapPin className="h-3 w-3 shrink-0" />
-                {cityKnown ? "已自动带出坐标（可手动微调）" : `「${city}」不在预设列表，请手动填写经纬度`}
+                {preset?.longitude != null && preset?.latitude != null
+                  ? "已由地图取点定位，坐标已填好（可在下方微调）"
+                  : cityKnown
+                    ? "已自动带出坐标（可手动微调）"
+                    : `「${city}」不在预设列表，请手动填写经纬度`}
               </p>
             )}
           </div>

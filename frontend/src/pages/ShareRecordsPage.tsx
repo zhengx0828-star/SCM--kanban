@@ -592,7 +592,7 @@ function ShareInlineCell({ record }: { record: ShareRecord }) {
       }}
       className={cn(
         "inline-flex h-7 min-w-[3.5rem] cursor-pointer items-center justify-end rounded px-2 tabular-nums transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        record.risk_fluctuation && "font-medium text-red-600 dark:text-red-400",
+        record.risk_fluctuation && "font-medium text-amber-600 dark:text-amber-400",
         record.share_current == null && "italic text-muted-foreground"
       )}
       title="点击修改"
@@ -774,7 +774,7 @@ function RiskChips({ record }: { record: ShareRecord }) {
   const chips: { label: string; cls: string }[] = [];
   if (record.risk_sole) chips.push({ label: "独供", cls: "bg-red-500/10 text-red-600 dark:text-red-400" });
   if (record.risk_fluctuation)
-    chips.push({ label: "波动", cls: "bg-red-500/10 text-red-600 dark:text-red-400" });
+    chips.push({ label: "波动", cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" });
   if (record.risk_deviation)
     chips.push({ label: "偏差", cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" });
   if (chips.length === 0) return <span className="text-xs text-muted-foreground">—</span>;

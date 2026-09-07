@@ -2,3 +2,8 @@
 # 允许受信任依赖执行构建脚本（esbuild 需要 postinstall 安装原生二进制）
 allowBuilds:
   esbuild: true
+
+# hoisted 布局：扁平 node_modules（真实文件），不依赖 junction/symlink。
+# 迁移到 D 盘后 pnpm isolated 模式的 linking 阶段异常（顶层/nested 链接变空目录），
+# 改用 hoisted 可彻底规避（布局与 npm/yarn 一致）。
+nodeLinker: hoisted
