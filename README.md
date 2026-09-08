@@ -16,7 +16,7 @@
 | 供需管理 | `/supply-demand` | 项目级客户需求（1-12 月）、供应商产能、BOM 用量系数、供需平衡分析 |
 | 项目供需明细 | `/supply-demand/projects/:projectId` | 项目下的供应明细、关联物料/供应商，录入需求 / 产能 / BOM 系数 |
 | 份额管理 | `/share` | 项目维度份额概览：KPI 卡 + 风险排行 + 份额×评分四象限 + 月末结转 |
-| 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（含基地配额列）+ 行内编辑 + 基地拉线配置（动态基地列） |
+| 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（含基地配额列）+ 行内编辑/删除 + 基地拉线配置（动态基地列，bases 随行快照） |
 | 主数据 | `/materials` | 供应商 / 物料 / 供应关系 / 项目 统一管理页（含地图点位、风险等级） |
 | 规则手册 | `/rules` | 项目 SOP 手册：业务规则与数据口径，按 module 分组 |
 | 库存管理 | `/inventory` | 库存信号塔：项目×基地×物料 推算单元，30 天日度 DOH 推算、动态安全库存、Excel 导入、行内手改重算、顶部风险时间漏斗四卡 |
@@ -30,7 +30,7 @@
 - SQLAlchemy 2.0 ORM（`Mapped` / `mapped_column` 声明式）
 - Pydantic v2（`ConfigDict(from_attributes=True)`）
 - SQLite（数据库固定为 `backend/products.db`，路径基于代码文件定位，不依赖启动目录）
-- openpyxl（份额管理 Excel 导入）
+- openpyxl（份额管理 / 库存 Excel 导入）
 
 **前端**（`frontend/`）
 - React 18 + TypeScript + Vite 5 + Tailwind CSS v4
@@ -39,11 +39,11 @@
 - React Hook Form + Zod 表单校验
 - ECharts 6（图表 + 中国地图）、next-themes（明暗主题）、sonner（toast）
 
-**数据库模型（三层七表，核心业务模型）**
+**数据库模型（三层八表，核心业务模型）**
 - L1 主数据：`projects` / `materials`（PN 唯一）/ `suppliers`（含 `risk_level` 地图风险等级，红/黄/绿/NULL=未评估）
 - L2 供应关系：`supply_relations`（material × supplier 唯一，四元组）
-- L3 项目明细：`project_supply_relations`（UNIQUE(project, supply_relation)，模块扩展字段）
-- L3 份额管理：`share_records`（UNIQUE(project, supply_relation, month)，按月快照）+ `share_base_configs`（项目 × 月 基地拉线配置，UNIQUE(project, month)）
+- L3 项目明细：`project_supply_relations`（UNIQUE(project, supply_relation)，模块扩展字段 demand/capacity/bom_factor 等）
+- L3 份额管理：`share_records`（UNIQUE(project_id, supply_relation_id, month)，按月快照；份额/评分/建议配额/独供 + `bases` 基地快照 JSON `[{base, share, lines}]`，拉线数随记录自含。早期独立 `share_base_configs` 表已废弃，后端启动时自动 DROP）
 - L3 库存信号塔：`inventory_plans`（UNIQUE(project, base, material)，推算单元，存 lead_time/on_hand/hist_json/fcast_json）+ `inventory_days`（UNIQUE(plan, date)，只存人改过的日格：demand_override/manual_demand/manual_in/ending_override）
 
 > 另有 `products`（历史遗留的通用 CRUD）与 `rules`（SOP 规则手册）两张辅助表。
@@ -88,9 +88,9 @@
 
 ### 3.4 Git 状态
 
-- 仓库已初始化（master 分支，初始提交 `2fddd53`）。
-- `runtime/`、`node_modules/`、`backend/products.db`、`.workbuddy/`、`.codebuddy/`、`*.db.bak-*`、`size_report.txt` 均已在 `.gitignore` 排除，**不进 git**。
-- 待上 GitHub 后走增量迭代（见第九节）。
+- 仓库已推送到 GitHub：`https://github.com/zhengx0828-star/SCM--kanban.git`（origin，默认分支 `master`，本地已与远程建立追踪，增量同步迭代中）。
+- `runtime/`、`node_modules/`、`backend/products.db`、`.workbuddy/`、`.codebuddy/`、`*.db.bak-*`、`size_report.txt` 均已在 `.gitignore` 排除，**不进 git**（首次 clone 到内网后需按 6.1 方式 B 手动补拷 `runtime/`、`node_modules/`、`products.db` 这 3 项）。
+- 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`。
 
 ---
 
@@ -311,22 +311,23 @@ git ls-remote https://github.com/xxx/xxx.git
 
 > 双向开发 = 外网/内网都改代码，靠 GitHub 同步。**核心纪律：两端都从同一个 commit 出发；改代码前先 `git pull`；push 前先 `git status` 确认改动范围。**
 
-### 9.1 外网首次推送到 GitHub
+### 9.1 外网首次推送到 GitHub（已完成，供新环境参考）
+
+当前仓库已推送至 `https://github.com/zhengx0828-star/SCM--kanban.git`（origin / master 分支），日常同步直接 `git pull` + `git push`（见 9.3）。若在新外网机器上从零接入，参照：
 
 ```powershell
 cd scm-kanban
-git remote add origin https://github.com/<你的用户名>/<仓库名>.git
-git branch -M main
-git push -u origin main
+git remote add origin https://github.com/zhengx0828-star/SCM--kanban.git
+git push -u origin master
 ```
 
-> 提醒：仓库根已初始化并提交（`2fddd53`）。`runtime/`、`node_modules/`、`products.db` 等不进 git，首次 clone 到内网后需**手动补拷**这 3 项（见 6.1 方式 B）。
+> 提醒：`runtime/`、`node_modules/`、`products.db` 等不进 git，首次 clone 到内网后需**手动补拷**这 3 项（见 6.1 方式 B）。
 
 ### 9.2 内网同步
 
 ```powershell
 # 首次：clone + 补拷贝被忽略的目录
-git clone https://github.com/<你的用户名>/<仓库名>.git
+git clone https://github.com/zhengx0828-star/SCM--kanban.git
 # （把 runtime/、node_modules/、products.db 拷贝进 clone 出来的目录）
 
 # 日常：拉取
@@ -363,7 +364,7 @@ scm-kanban/
 │   ├── app/
 │   │   ├── main.py                # 入口 + CORS + 自动建表
 │   │   ├── database.py            # SQLAlchemy 引擎与会话（DB 路径固定）
-│   │   ├── models.py              # 三层六表 ORM 模型（含 share_records）
+│   │   ├── models.py              # 三层八表 ORM 模型（含 share_records / inventory_plans / inventory_days）
 │   │   ├── schemas.py             # Pydantic v2 模式
 │   │   ├── routers/               # products / suppliers / materials /
 │   │   │                          #   supply_relations / projects / rules / share / inventory
@@ -440,18 +441,17 @@ scm-kanban/
 | GET | `/api/share/risks` | 风险排行（独供 > 波动 > 偏差 > 错配） |
 | GET | `/api/share/quadrant` | 份额 × 评分四象限散点 |
 | GET | `/api/share/records` | 份额明细列表（支持 keyword 搜索） |
-| POST | `/api/share/records` | 手动新增份额记录 |
-| PUT | `/api/share/records/{id}` | 手动修改（自动重算，标记手改） |
-| GET | `/api/share/base-config` | 项目 × 月 基地拉线配置 |
-| PUT | `/api/share/base-config` | 保存基地配置（自动重算未手改份额 = Σ(配额×拉线数)÷Σ拉线数） |
-| POST | `/api/share/import` | Excel 导入份额数据（openpyxl，支持基地配额列） |
+| POST | `/api/share/records` | 手动新增份额记录（传 bases 自动算份额与建议配额） |
+| PUT | `/api/share/records/{id}` | 手动修改（显式传 share_current 视为手改并锁定；只传 bases 则清手改自动重算） |
+| DELETE | `/api/share/records/{id}` | 删除份额记录（剩余记录自动重算） |
+| POST | `/api/share/import` | Excel 导入份额数据（openpyxl；支持「基地X_份额/基地X_线数」成对列；校验 QDC 五档、份额 0-100） |
 | POST | `/api/share/rollover` | 月末结转：本月 → 下月空档 |
 
 **库存信号塔 inventory**
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/inventory/plans` | 推算单元列表（项目×基地×物料，含 30 天矩阵；safe/excess 参与预警判定） |
-| GET | `/api/inventory/summary` | 顶部 KPI 四卡汇总（按当前筛选视图的 PN 去重） |
+| GET | `/api/inventory/summary` | 遗留 KPI 概览接口（按 PN 去重，暂未接 UI；顶部风险时间漏斗四卡由前端按当前筛选行本地统计） |
 | PATCH | `/api/inventory/plans/{id}` | 改 LeadTime / 初始现有库存（重算矩阵） |
 | PUT | `/api/inventory/plans/{id}/days` | 批量改某日单元格（落库即重算，返回整行新矩阵） |
 | POST | `/api/inventory/import` | Excel 导入（重建推算单元 + 清手改） |
