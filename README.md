@@ -19,6 +19,7 @@
 | 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（含基地配额列）+ 行内编辑 + 基地拉线配置（动态基地列） |
 | 主数据 | `/materials` | 供应商 / 物料 / 供应关系 / 项目 统一管理页（含地图点位、风险等级） |
 | 规则手册 | `/rules` | 项目 SOP 手册：业务规则与数据口径，按 module 分组 |
+| 库存管理 | `/inventory` | 库存信号塔：项目×基地×物料 推算单元，30 天日度 DOH 推算、动态安全库存、Excel 导入、行内手改重算、顶部风险时间漏斗四卡 |
 
 ---
 
@@ -43,6 +44,7 @@
 - L2 供应关系：`supply_relations`（material × supplier 唯一，四元组）
 - L3 项目明细：`project_supply_relations`（UNIQUE(project, supply_relation)，模块扩展字段）
 - L3 份额管理：`share_records`（UNIQUE(project, supply_relation, month)，按月快照）+ `share_base_configs`（项目 × 月 基地拉线配置，UNIQUE(project, month)）
+- L3 库存信号塔：`inventory_plans`（UNIQUE(project, base, material)，推算单元，存 lead_time/on_hand/hist_json/fcast_json）+ `inventory_days`（UNIQUE(plan, date)，只存人改过的日格：demand_override/manual_demand/manual_in/ending_override）
 
 > 另有 `products`（历史遗留的通用 CRUD）与 `rules`（SOP 规则手册）两张辅助表。
 
@@ -364,7 +366,7 @@ scm-kanban/
 │   │   ├── models.py              # 三层六表 ORM 模型（含 share_records）
 │   │   ├── schemas.py             # Pydantic v2 模式
 │   │   ├── routers/               # products / suppliers / materials /
-│   │   │                          #   supply_relations / projects / rules / share
+│   │   │                          #   supply_relations / projects / rules / share / inventory
 │   │   └── seed.py                # 演示数据（当前未启用）
 │   ├── scripts/smoke_test.py      # API 冒烟测试
 │   ├── requirements.txt
@@ -372,12 +374,13 @@ scm-kanban/
 ├── frontend/                      # React 应用
 │   ├── src/
 │   │   ├── pages/                 # Dashboard / SupplyDemand / ProjectSupplyDetail /
-│   │   │                          #   Share / ShareRecords / SupplierMaster / Products / Rules
+│   │   │                          #   Share / ShareRecords / Inventory / SupplierMaster / Products / Rules
 │   │   ├── components/            # 通用组件（MaterialDrawerFilter、EmptyState 等）
 │   │   │                          #   + share/（四象限、导入、录入弹窗）
-│   │   ├── hooks/                 # TanStack Query 数据层（含 use-share）
+│   │   │                          #   + inventory/（Excel 导入弹窗）
+│   │   ├── hooks/                 # TanStack Query 数据层（含 use-share / use-inventory）
 │   │   ├── lib/                   # api 封装、工具函数
-│   │   └── types/                 # 类型定义（含 share）
+│   │   └── types/                 # 类型定义（含 share / inventory）
 │   └── package.json / vite.config.ts / tsconfig.json / components.json
 ├── scripts/                       # start-{backend,frontend}.{bat,sh}、gen_source_docx.py
 ├── docs/                          # 截图、opencode-reproduce-prompt.md（AI 复现提示词）
@@ -443,6 +446,15 @@ scm-kanban/
 | PUT | `/api/share/base-config` | 保存基地配置（自动重算未手改份额 = Σ(配额×拉线数)÷Σ拉线数） |
 | POST | `/api/share/import` | Excel 导入份额数据（openpyxl，支持基地配额列） |
 | POST | `/api/share/rollover` | 月末结转：本月 → 下月空档 |
+
+**库存信号塔 inventory**
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/inventory/plans` | 推算单元列表（项目×基地×物料，含 30 天矩阵；safe/excess 参与预警判定） |
+| GET | `/api/inventory/summary` | 顶部 KPI 四卡汇总（按当前筛选视图的 PN 去重） |
+| PATCH | `/api/inventory/plans/{id}` | 改 LeadTime / 初始现有库存（重算矩阵） |
+| PUT | `/api/inventory/plans/{id}/days` | 批量改某日单元格（落库即重算，返回整行新矩阵） |
+| POST | `/api/inventory/import` | Excel 导入（重建推算单元 + 清手改） |
 
 **规则 rules**
 | 方法 | 路径 | 说明 |
