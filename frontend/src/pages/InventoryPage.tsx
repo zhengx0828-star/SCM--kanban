@@ -398,9 +398,6 @@ export default function InventoryPage() {
                     <Legend cls="bg-red-400" label="偏低(期末<SS / DOH<安全)" />
                     <Legend cls="bg-amber-400" label="贴近安全线" />
                     <Legend cls="bg-blue-500" label="过剩(DOH>过剩天数)" />
-                    <span className="inline-flex items-center gap-1">
-                      <span className="text-[9px] text-amber-500">▲</span> 手改格
-                    </span>
                     <span className="text-muted-foreground/70">漏斗按每行首次跌破安全线的日期分桶</span>
                   </div>
                   {/* 漏斗过滤状态 / 恢复 */}
@@ -722,12 +719,9 @@ function PlanBlock({
             <div
               key={c.date}
               title={`${c.date}\n期末 ${fmt(c.ending)}（SS ${fmt(plan.ss)}）\nDOH ${fmtDoh(c)}${c.doh_capped ? "（窗口内未耗尽）" : ""}\n双击修改期末库存`}
-              className={`relative flex cursor-cell flex-col items-center justify-center border-r px-0.5 py-1 last:border-r-0 ${
-                c.manual ? "ring-1 ring-inset ring-amber-400/70" : ""
-              } ${meta.cellCls}`}
+              className={`relative flex cursor-cell flex-col items-center justify-center border-r px-0.5 py-1 last:border-r-0 ${meta.cellCls}`}
               onDoubleClick={() => onOpenEdit(plan.id, c.date, "ending", String(c.ending))}
             >
-              {c.manual && <span className="absolute right-0.5 top-0 text-[8px] leading-none text-amber-500">▲</span>}
               {isEditing ? (
                 <CellInput defaultValue={String(c.ending)} editRef={editRef} onCommit={onCommitEdit} onCancel={onCancelEdit} />
               ) : (
@@ -763,7 +757,7 @@ function PlanBlock({
             {plan.cov != null ? ` (${plan.cov.toFixed(2)})` : ""}
           </span>
         </span>
-        <span className="ml-auto">目标安全天数 {safe} 天 · 手工修正 双击即改（▲=有手改）</span>
+        <span className="ml-auto">目标安全天数 {safe} 天 · 双击任意格直接修改数值</span>
       </div>
 
       {/* 展开：30 天 × 5 行矩阵 */}
@@ -771,7 +765,7 @@ function PlanBlock({
         <div className="grid border-b" style={{ gridTemplateColumns: GRID }}>
           <div className="sticky left-0 z-20 border-r bg-muted/20 p-2" style={{ width: LEFT_W }}>
             <p className="text-[10px] font-medium text-muted-foreground">
-              每日 5 行（所有格都可编辑，双击数字直接改；被改过的格带 ▲）
+              每日 5 行（双击数字即可修改：预测 / 手需 / 入库 / 期末，DOH 格反推目标期末库存）
             </p>
           </div>
           {plan.days.map((c, i) => (
@@ -808,16 +802,16 @@ function DayRowCell({
   onCancel: () => void;
   editRef: React.RefObject<HTMLInputElement>;
 }) {
-  const text: { label: string; value: string; note?: string; danger?: boolean } =
+  const text: { label: string; value: string; danger?: boolean } =
     field === "sys"
-      ? { label: "预测", value: cell.sys_demand.toFixed(0), note: cell.sys_overridden ? "已手改" : undefined }
+      ? { label: "预测", value: cell.sys_demand.toFixed(0) }
       : field === "md"
-      ? { label: "手需", value: cell.manual_demand.toFixed(0), note: cell.manual_demand !== 0 ? "手改" : undefined }
+      ? { label: "手需", value: cell.manual_demand.toFixed(0) }
       : field === "mi"
-      ? { label: "入库", value: cell.manual_in.toFixed(0), note: cell.manual_in !== 0 ? "手改" : undefined }
+      ? { label: "入库", value: cell.manual_in.toFixed(0) }
       : field === "ending"
-      ? { label: "期末", value: cell.ending.toFixed(0), note: cell.ending_overridden ? "已覆盖" : undefined }
-      : { label: "DOH", value: cell.doh_capped ? "30+" : cell.doh.toFixed(1), note: cell.ending_overridden ? "由覆盖推" : undefined };
+      ? { label: "期末", value: cell.ending.toFixed(0) }
+      : { label: "DOH", value: cell.doh_capped ? "30+" : cell.doh.toFixed(1) };
 
   const meta = INV_STATUS_META[cell.status];
   const fieldKey = DAY_FIELDS.find((f) => f.key === field)!;
@@ -839,11 +833,6 @@ function DayRowCell({
           }`}>
             {text.value}
           </span>
-          {(field === "sys" && cell.sys_overridden) ||
-          ((field === "md" || field === "mi") && ((cell.manual_demand !== 0) || (cell.manual_in !== 0))) ||
-          (field === "ending" && cell.ending_overridden) ? (
-            <span className="text-[8px] text-amber-500">▲</span>
-          ) : null}
           {field === "doh" && (cell.doh_capped ? <span className="text-blue-500">∞</span> : null)}
         </>
       )}
