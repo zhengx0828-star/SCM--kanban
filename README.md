@@ -90,7 +90,8 @@
 
 - 仓库已推送到 GitHub：`https://github.com/zhengx0828-star/SCM--kanban.git`（origin，默认分支 `master`，本地已与远程建立追踪，增量同步迭代中）。
 - `runtime/`、`node_modules/`、`backend/products.db`、`.workbuddy/`、`.codebuddy/`、`*.db.bak-*`、`size_report.txt` 均已在 `.gitignore` 排除，**不进 git**（首次 clone 到内网后需按 6.1 方式 B 手动补拷 `runtime/`、`node_modules/`、`products.db` 这 3 项）。
-- 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`。
+- **⚠️ 本机 GitHub 不可达（2026-09-16 实测）**：`curl https://github.com` → SSL 失败（http=000）；`git ls-remote origin` 超时。**本机直接 `git push` 会长时间卡死，不要反复重试**。改动先本地 commit，跨机中转用 `git bundle create <file> origin/master..master` 打包，拿到有网机器上 `git fetch <bundle> master` 后再 push（详见 9.5）。
+- 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`（push 可行时）。
 
 ---
 
@@ -112,7 +113,7 @@
 
 ## 五、内网网络说明（重要）
 
-> 你的内网是**访问受限**而非完全断网：常见站点（如 GitHub）一般可访问，但**规则不透明**，某些域名/协议可能被放行或阻断，需要**自己试探**。本项目的设计原则是：**默认离线可跑，需要联网时按「第八节」逐级尝试**。
+> 你的内网是**访问受限**而非完全断网：常见站点可能通也可能被阻断，**规则不透明，需要自己试探**。**2026-09-16 实测：本机 GitHub 不可达（SSL 失败 + `git ls-remote` 超时），push 改走 bundle 中转（见 9.5）**。本项目的设计原则是：**默认离线可跑，需要联网时按「第八节」逐级尝试**。
 
 - **拷贝进内网后，无需任何网络即可启动 Demo**（`runtime/` + `node_modules/` 自带）。
 - 只有当你要**拉取新依赖 / clone GitHub 仓库**时才需要网络。
@@ -221,6 +222,13 @@ cd frontend
    ```bash
    cd backend
    ..\runtime\python\python.exe scripts\smoke_test.py
+   ```
+5. （可选）灌入验证种子数据（幂等，可重复执行；**通过真实 API 造数，须先启动后端**，且在 `backend` 目录下执行）：
+   - 份额验证：`scripts\seed_share_validation.py`（**执行前会清空 share_records 表**，请先备份 products.db）
+   - 库存验证：`scripts\seed_inventory_validation.py`
+   ```bash
+   cd backend
+   ..\runtime\python\python.exe ..\scripts\seed_share_validation.py
    ```
 
 ---
@@ -342,7 +350,7 @@ cd scm-kanban
 git status                # 先看改了哪些文件
 git add -A
 git commit -m "描述本次改动"
-git push                  # 外网推送到 GitHub
+git push                  # 外网推送到 GitHub（本机不可用时走 9.5 bundle 中转）
 ```
 
 ### 9.4 双向开发注意事项
@@ -351,6 +359,26 @@ git push                  # 外网推送到 GitHub
 - **运行时/依赖不进 git**：`runtime/` 与 `node_modules/` 不跟随 git。新增前端依赖后，外网 `pnpm install` 会更新 `pnpm-lock.yaml`（进 git），内网 `git pull` 后需在能联网的一侧重新 `pnpm install`（或用离线包同步）。后端同理：改了 `requirements.txt` 后，需联网一侧重新 `uv pip install` 并在内网同步 `runtime\python\Lib\site-packages` 或整个 `runtime\python`。
 - **改代码前先 pull**：内网外网都可能改动，先 `git pull` 再动手，冲突面最小。
 - **AGENT.md 同步更新**：内网 AI 的认知全部来自 `AGENT.md` 和 `README.md`，任何环境/命令变化请同步更新这两份文档再提交。
+
+### 9.5 本机 GitHub 不可达时的 bundle 中转（2026-09-16 实测）
+
+本机直连 GitHub 失败（`http=000` + SSL 错误，`git ls-remote` 超时），**不要反复重试 push，会卡死**。改用「本地提交 + bundle 打包 + 有网机器代推」：
+
+```powershell
+# 1) 先确认改动已本地提交
+git log --oneline origin/master..master
+
+# 2) 打包未推送的提交为 bundle 文件
+git bundle create D:\unpushed.bundle origin/master..master
+git bundle verify D:\unpushed.bundle     # 应输出 "is okay"
+
+# 3) 拿到有网机器上取回并推送
+git fetch D:\unpushed.bundle master
+git merge FETCH_HEAD                      # 或按需 rebase
+git push
+```
+
+纯文本审阅场景也可用 `git format-patch --no-binary origin/master..master` 生成补丁文件带走。
 
 ---
 
@@ -383,7 +411,8 @@ scm-kanban/
 │   │   ├── lib/                   # api 封装、工具函数
 │   │   └── types/                 # 类型定义（含 share / inventory）
 │   └── package.json / vite.config.ts / tsconfig.json / components.json
-├── scripts/                       # start-{backend,frontend}.{bat,sh}、gen_source_docx.py
+├── scripts/                       # start-{backend,frontend}.{bat,sh}（.bat 为 GBK 编码，勿按 UTF-8 改）、
+│                                  #   gen_source_docx.py、seed_{share,inventory}_validation.py（验证种子，幂等可重跑）
 ├── docs/                          # 截图、opencode-reproduce-prompt.md（AI 复现提示词）
 └── README.md / AGENT.md
 ```
@@ -477,6 +506,7 @@ scm-kanban/
 
 | 问题 | 处理 |
 | --- | --- |
+| 启动脚本双击后刷一屏「不是内部或外部命令」 | ★ `.bat` 编码被破坏（存成 UTF-8 而非 GBK）。修复流程见 `AGENT.md`「六、坑 7」：用 Python 把三个 `.bat` 转 GBK + CRLF，**不要用编辑器直接另存** |
 | 启动脚本报「未找到 npm/pnpm」 | 将 `runtime\node` 放回项目目录后重试；或安装 Node.js LTS 并加入 PATH |
 | 端口 8000 / 5173 被占用 | 一键脚本会自动检测并跳过已占用服务；手动启动时换端口需同步改 vite 代理 |
 | 前端请求 `/api` 失败 | 确认后端已启动；前端通过 Vite 代理访问后端，无需额外配 CORS |
