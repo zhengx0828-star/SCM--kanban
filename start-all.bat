@@ -1,28 +1,27 @@
 @echo off
 rem ============================================
 rem  Product Manager - One-Click Launcher
-rem  ä¸€é”®å¯åŠ¨ï¼šåŽç«¯(8000) + å‰ç«¯(5173) + æµè§ˆå™¨
+rem  Ò»¼üÆô¶¯£ººó¶Ë(8000) + Ç°¶Ë(5173) + ä¯ÀÀÆ÷
 rem
-rem  è¿è¡Œæ—¶ç­–ç•¥ï¼ˆâ˜… å…¨éƒ¨ç›¸å¯¹è·¯å¾„ï¼Œé¡¹ç›®å¯æ•´ä½“æ¬ç§»ï¼Œå†…ç½‘è¿ç§»æ— éœ€æ”¹è„šæœ¬ï¼‰ï¼š
-rem    Python : runtime\python\python.exeï¼ˆå†…ç½®ï¼Œä¼˜å…ˆï¼›åŽç«¯ä¾èµ–å·²è£…å…¥å…¶ site-packagesï¼‰
-rem             æ‰¾ä¸åˆ°æ—¶å›žé€€ .workbuddy æ‰˜ç®¡ Python
-rem    Node   : runtime\node\node.exeï¼ˆå†…ç½®ï¼Œä¼˜å…ˆï¼Œè‡ªå¸¦ npm/pnpmï¼‰
-rem             æ‰¾ä¸åˆ°æ—¶å›žé€€ç³»ç»Ÿ PATH
-rem  å‰ç«¯åŒ…ç®¡ç†å™¨ : pnpm ä¼˜å…ˆï¼Œå›žé€€ npm
+rem  ÔËÐÐÊ±²ßÂÔ£¨¡ï È«²¿Ïà¶ÔÂ·¾¶£¬ÏîÄ¿¿ÉÕûÌå°áÒÆ£¬ÄÚÍøÇ¨ÒÆÎÞÐè¸Ä½Å±¾£©£º
+rem    Python : runtime\python\python.exe£¨ÄÚÖÃ£¬ÓÅÏÈ£»ºó¶ËÒÀÀµÒÑ×°ÈëÆä site-packages£©
+rem             ÕÒ²»µ½Ê±»ØÍË .workbuddy ÍÐ¹Ü Python
+rem    Node   : runtime\node\node.exe£¨ÄÚÖÃ£¬ÓÅÏÈ£¬×Ô´ø npm/pnpm£©
+rem             ÕÒ²»µ½Ê±»ØÍËÏµÍ³ PATH
+rem  Ç°¶Ë°ü¹ÜÀíÆ÷ : pnpm ÓÅÏÈ£¬»ØÍË npm
 rem ============================================
-chcp 65001 >nul
 setlocal
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
 echo ==========================================
-echo   äº§å“ç®¡ç†ç³»ç»Ÿ - ä¸€é”®å¯åŠ¨å™¨
-echo   å‰ç«¯é¡µé¢: http://localhost:5173
-echo   API æ–‡æ¡£: http://localhost:8000/docs
+echo   ²úÆ·¹ÜÀíÏµÍ³ - Ò»¼üÆô¶¯Æ÷
+echo   Ç°¶ËÒ³Ãæ: http://localhost:5173
+echo   API ÎÄµµ: http://localhost:8000/docs
 echo ==========================================
 echo.
 
-rem ===== å®šä½ Pythonï¼šé¡¹ç›®å†…ç½® runtime ä¼˜å…ˆ =====
+rem ===== ¶¨Î» Python£ºÏîÄ¿ÄÚÖÃ runtime ÓÅÏÈ =====
 set "PYTHON=%ROOT%runtime\python\python.exe"
 if not exist "%PYTHON%" (
     if exist "%USERPROFILE%\.workbuddy\binaries\python\versions\3.13.12\python.exe" (
@@ -30,67 +29,67 @@ if not exist "%PYTHON%" (
     )
 )
 if not exist "%PYTHON%" (
-    echo [é”™è¯¯] æ‰¾ä¸åˆ° Python 3.13.12ã€‚
-    echo   å·²å°è¯•å†…ç½®: %ROOT%runtime\python\python.exe
-    echo   è¯·å°† runtime\python ç›®å½•æ”¾å›žé¡¹ç›®åŽé‡è¯•ï¼ˆå†…ç½‘è¿ç§»å¿…é¡»å¸¦ä¸Šï¼‰ã€‚
+    echo [´íÎó] ÕÒ²»µ½ Python 3.13.12¡£
+    echo   ÒÑ³¢ÊÔÄÚÖÃ: %ROOT%runtime\python\python.exe
+    echo   Çë½« runtime\python Ä¿Â¼·Å»ØÏîÄ¿ºóÖØÊÔ£¨ÄÚÍøÇ¨ÒÆ±ØÐë´øÉÏ£©¡£
     pause
     exit /b 1
 )
-echo åŽç«¯ Python: %PYTHON%
+echo ºó¶Ë Python: %PYTHON%
 
-rem ===== å®šä½ Nodeï¼šé¡¹ç›®å†…ç½® runtime ä¼˜å…ˆ =====
+rem ===== ¶¨Î» Node£ºÏîÄ¿ÄÚÖÃ runtime ÓÅÏÈ =====
 set "NODE_DIR=%ROOT%runtime\node"
 if not exist "%NODE_DIR%\node.exe" set "NODE_DIR="
 if defined NODE_DIR (
     set "PATH=%NODE_DIR%;%PATH%"
-    echo å‰ç«¯ Node  : %NODE_DIR%\node.exe
+    echo Ç°¶Ë Node  : %NODE_DIR%\node.exe
 ) else (
-    echo å‰ç«¯ Node  : ä½¿ç”¨ç³»ç»Ÿ PATH
+    echo Ç°¶Ë Node  : Ê¹ÓÃÏµÍ³ PATH
 )
 
-rem ===== å®šä½å‰ç«¯åŒ…ç®¡ç†å™¨ï¼ˆpnpm ä¼˜å…ˆï¼‰=====
+rem ===== ¶¨Î»Ç°¶Ë°ü¹ÜÀíÆ÷£¨pnpm ÓÅÏÈ£©=====
 set "PKG_NAME="
 set "PKG_CMD="
 call :detect_pkgmgr
 if not defined PKG_CMD goto :no_pkgmgr
-echo å‰ç«¯åŒ…ç®¡ç†å™¨: %PKG_NAME%
+echo Ç°¶Ë°ü¹ÜÀíÆ÷: %PKG_NAME%
 echo.
 
-rem ---- [1] æ£€æŸ¥åŽç«¯ä¾èµ–ï¼ˆå·²è£…åˆ™è·³è¿‡ï¼Œå†…ç½‘æ— ç½‘ä¹Ÿå¯ç›´æŽ¥å¯åŠ¨ï¼‰----
+rem ---- [1] ¼ì²éºó¶ËÒÀÀµ£¨ÒÑ×°ÔòÌø¹ý£¬ÄÚÍøÎÞÍøÒ²¿ÉÖ±½ÓÆô¶¯£©----
 if exist "%ROOT%runtime\python\Lib\site-packages\fastapi" (
-    echo [1/3] åŽç«¯ä¾èµ–å·²å°±ç»ªï¼Œè·³è¿‡å®‰è£…ã€‚
+    echo [1/3] ºó¶ËÒÀÀµÒÑ¾ÍÐ÷£¬Ìø¹ý°²×°¡£
 ) else (
-    echo [1/3] å®‰è£…åŽç«¯ä¾èµ–ï¼ˆé¦–æ¬¡è¾ƒæ…¢ï¼Œè¯·ç¨å€™ï¼‰...
+    echo [1/3] °²×°ºó¶ËÒÀÀµ£¨Ê×´Î½ÏÂý£¬ÇëÉÔºò£©...
     "%PYTHON%" -m uv pip install -r backend\requirements.txt --python "%PYTHON%"
     if errorlevel 1 goto :error
 )
 
-rem ---- [2] æ£€æŸ¥å‰ç«¯ä¾èµ– ----
-echo [2/3] æ£€æŸ¥å‰ç«¯ä¾èµ–...
+rem ---- [2] ¼ì²éÇ°¶ËÒÀÀµ ----
+echo [2/3] ¼ì²éÇ°¶ËÒÀÀµ...
 if not exist "frontend\node_modules" goto :setup_frontend
 goto :frontend_ready
 
 :setup_frontend
-echo       å®‰è£…å‰ç«¯ä¾èµ–ï¼ˆé¦–æ¬¡è¾ƒæ…¢ï¼Œè¯·ç¨å€™ï¼‰...
+echo       °²×°Ç°¶ËÒÀÀµ£¨Ê×´Î½ÏÂý£¬ÇëÉÔºò£©...
 pushd frontend
 call "%PKG_CMD%" install
 popd
 if errorlevel 1 goto :error
 
 :frontend_ready
-echo [2/3] ä¾èµ–æ£€æŸ¥å®Œæˆ.
+echo [2/3] ÒÀÀµ¼ì²éÍê³É.
 echo.
 
-rem ---- [3] å¯åŠ¨åŽç«¯ï¼ˆç«¯å£ç©ºé—²æ—¶ï¼‰ ----
+rem ---- [3] Æô¶¯ºó¶Ë£¨¶Ë¿Ú¿ÕÏÐÊ±£© ----
 netstat -ano | findstr ":8000" | findstr "LISTENING" >nul
 if not errorlevel 1 (
-    echo [3/3] ç«¯å£ 8000 å·²è¢«å ç”¨ï¼ŒåŽç«¯å¯èƒ½å·²åœ¨è¿è¡Œï¼Œè·³è¿‡å¯åŠ¨ã€‚
+    echo [3/3] ¶Ë¿Ú 8000 ÒÑ±»Õ¼ÓÃ£¬ºó¶Ë¿ÉÄÜÒÑÔÚÔËÐÐ£¬Ìø¹ýÆô¶¯¡£
 ) else (
-    echo [3/3] å¯åŠ¨åŽç«¯æœåŠ¡ http://127.0.0.1:8000 ...
+    echo [3/3] Æô¶¯ºó¶Ë·þÎñ http://127.0.0.1:8000 ...
     start "Product Backend" cmd /k "cd /d ""%~dp0backend"" && ""%PYTHON%"" -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
 )
 
-rem ---- [4] å¯åŠ¨å‰ç«¯ï¼ˆç«¯å£ç©ºé—²æ—¶ï¼‰ ----
+rem ---- [4] Æô¶¯Ç°¶Ë£¨¶Ë¿Ú¿ÕÏÐÊ±£© ----
 if "%PKG_NAME%"=="pnpm" (
     set "DEV_CMD="%PKG_CMD%" run dev --host 127.0.0.1"
 ) else (
@@ -98,26 +97,26 @@ if "%PKG_NAME%"=="pnpm" (
 )
 netstat -ano | findstr ":5173" | findstr "LISTENING" >nul
 if not errorlevel 1 (
-    echo [4/4] ç«¯å£ 5173 å·²è¢«å ç”¨ï¼Œå‰ç«¯å¯èƒ½å·²åœ¨è¿è¡Œï¼Œè·³è¿‡å¯åŠ¨ã€‚
+    echo [4/4] ¶Ë¿Ú 5173 ÒÑ±»Õ¼ÓÃ£¬Ç°¶Ë¿ÉÄÜÒÑÔÚÔËÐÐ£¬Ìø¹ýÆô¶¯¡£
 ) else (
-    echo [4/4] å¯åŠ¨å‰ç«¯æœåŠ¡ http://localhost:5173 ...
+    echo [4/4] Æô¶¯Ç°¶Ë·þÎñ http://localhost:5173 ...
     start "Product Frontend" cmd /k "cd /d ""%~dp0frontend"" && %DEV_CMD%"
 )
 
 echo.
-echo æ­£åœ¨ç­‰å¾…æœåŠ¡å¯åŠ¨ï¼Œç¨åŽè‡ªåŠ¨æ‰“å¼€æµè§ˆå™¨...
-timeout /t 6 /nobreak >nul
+echo ÕýÔÚµÈ´ý·þÎñÆô¶¯£¬ÉÔºó×Ô¶¯´ò¿ªä¯ÀÀÆ÷...
+"%SystemRoot%\System32\timeout.exe" /t 6 /nobreak >nul 2>&1
 start "" "http://localhost:5173"
 
 echo.
-echo å¯åŠ¨å®Œæˆï¼
-echo   å‰ç«¯é¡µé¢: http://localhost:5173
-echo   API æ–‡æ¡£: http://localhost:8000/docs
-echo   å…³é—­å¯¹åº”çš„æœåŠ¡çª—å£å³å¯åœæ­¢è¯¥æœåŠ¡ã€‚
+echo Æô¶¯Íê³É£¡
+echo   Ç°¶ËÒ³Ãæ: http://localhost:5173
+echo   API ÎÄµµ: http://localhost:8000/docs
+echo   ¹Ø±Õ¶ÔÓ¦µÄ·þÎñ´°¿Ú¼´¿ÉÍ£Ö¹¸Ã·þÎñ¡£
 pause
 exit /b 0
 
-rem ===== å­è¿‡ç¨‹ï¼šå®šä½åŒ…ç®¡ç†å™¨ï¼ˆå†…ç½® runtime ä¼˜å…ˆï¼Œå…¶æ¬¡ç³»ç»Ÿï¼‰=====
+rem ===== ×Ó¹ý³Ì£º¶¨Î»°ü¹ÜÀíÆ÷£¨ÄÚÖÃ runtime ÓÅÏÈ£¬Æä´ÎÏµÍ³£©=====
 :detect_pkgmgr
 if defined NODE_DIR (
     if exist "%NODE_DIR%\pnpm.cmd" (
@@ -138,13 +137,13 @@ goto :eof
 
 :no_pkgmgr
 echo.
-echo [é”™è¯¯] æœªæ‰¾åˆ° npm / pnpm å‘½ä»¤ã€‚
-echo è¯·å°† runtime\node ç›®å½•æ”¾å›žé¡¹ç›®åŽé‡è¯•ï¼Œæˆ–å®‰è£… Node.js LTS å¹¶åŠ å…¥ PATHã€‚
+echo [´íÎó] Î´ÕÒµ½ npm / pnpm ÃüÁî¡£
+echo Çë½« runtime\node Ä¿Â¼·Å»ØÏîÄ¿ºóÖØÊÔ£¬»ò°²×° Node.js LTS ²¢¼ÓÈë PATH¡£
 pause
 exit /b 1
 
 :error
 echo.
-echo å¯åŠ¨å¤±è´¥ï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹é”™è¯¯ä¿¡æ¯åŽé‡è¯•ã€‚
+echo Æô¶¯Ê§°Ü£¬Çë¼ì²éÉÏ·½´íÎóÐÅÏ¢ºóÖØÊÔ¡£
 pause
 exit /b 1

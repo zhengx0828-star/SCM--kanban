@@ -2,40 +2,40 @@
 rem ============================================
 rem  Product Manager - Frontend Launcher
 rem  Starts Vite dev server on http://localhost:5173
-rem  è¿è¡Œæ—¶ï¼šé¡¹ç›®å†…ç½® runtime\nodeï¼ˆå…¨ç›¸å¯¹è·¯å¾„ï¼Œå¯æ•´ä½“æ¬ç§»ï¼‰ï¼Œpnpm ä¼˜å…ˆ
+rem  ÔËÐÐÊ±£ºÏîÄ¿ÄÚÖÃ runtime\node£¨È«Ïà¶ÔÂ·¾¶£¬¿ÉÕûÌå°áÒÆ£©£¬pnpm ÓÅÏÈ
 rem ============================================
 setlocal
 cd /d "%~dp0..\frontend"
 
-rem ===== å®šä½ Nodeï¼šé¡¹ç›®å†…ç½® runtime ä¼˜å…ˆ =====
+rem ===== ¶¨Î» Node£ºÏîÄ¿ÄÚÖÃ runtime ÓÅÏÈ =====
 set "NODE_DIR="
 for %%I in ("..\runtime\node") do set "NODE_DIR=%%~fI"
 if not exist "%NODE_DIR%\node.exe" set "NODE_DIR="
 if defined NODE_DIR set "PATH=%NODE_DIR%;%PATH%"
 
-rem ===== å®šä½å‰ç«¯åŒ…ç®¡ç†å™¨ï¼ˆpnpm ä¼˜å…ˆï¼‰=====
+rem ===== ¶¨Î»Ç°¶Ë°ü¹ÜÀíÆ÷£¨pnpm ÓÅÏÈ£©=====
 set "PKG_NAME="
 set "PKG_CMD="
 call :detect_pkgmgr
 if not defined PKG_CMD goto :no_pkgmgr
-echo ä½¿ç”¨ %PKG_NAME% ä½œä¸ºåŒ…ç®¡ç†å™¨ã€‚
+echo Ê¹ÓÃ %PKG_NAME% ×÷Îª°ü¹ÜÀíÆ÷¡£
 
-rem ===== ä¾èµ–ç¼ºå¤±æ—¶æ‰å®‰è£…ï¼ˆå†…ç½‘å·²è£…åˆ™è·³è¿‡ï¼‰=====
+rem ===== ÒÀÀµÈ±Ê§Ê±²Å°²×°£¨ÄÚÍøÒÑ×°ÔòÌø¹ý£©=====
 if not exist "node_modules" (
-    echo [1/2] å®‰è£…å‰ç«¯ä¾èµ–ï¼ˆé¦–æ¬¡è¾ƒæ…¢ï¼‰...
+    echo [1/2] °²×°Ç°¶ËÒÀÀµ£¨Ê×´Î½ÏÂý£©...
     call "%PKG_CMD%" install || goto :error
 )
 
-rem ===== ç«¯å£å ç”¨æ£€æŸ¥ =====
+rem ===== ¶Ë¿ÚÕ¼ÓÃ¼ì²é =====
 netstat -ano | findstr ":5173" | findstr "LISTENING" >nul
 if not errorlevel 1 (
     echo.
-    echo ç«¯å£ 5173 å·²è¢«å ç”¨ï¼Œå‰ç«¯å¯èƒ½å·²åœ¨è¿è¡Œï¼Œæ— éœ€é‡å¤å¯åŠ¨ã€‚
-    echo ç›´æŽ¥è®¿é—® http://localhost:5173 å³å¯ã€‚
+    echo ¶Ë¿Ú 5173 ÒÑ±»Õ¼ÓÃ£¬Ç°¶Ë¿ÉÄÜÒÑÔÚÔËÐÐ£¬ÎÞÐèÖØ¸´Æô¶¯¡£
+    echo Ö±½Ó·ÃÎÊ http://localhost:5173 ¼´¿É¡£
     goto :eof
 )
 
-echo [2/2] å¯åŠ¨ Vite å¼€å‘æœåŠ¡ http://localhost:5173 ...
+echo [2/2] Æô¶¯ Vite ¿ª·¢·þÎñ http://localhost:5173 ...
 if "%PKG_NAME%"=="pnpm" (
     call "%PKG_CMD%" run dev --host 127.0.0.1
 ) else (
@@ -43,7 +43,7 @@ if "%PKG_NAME%"=="pnpm" (
 )
 goto :eof
 
-rem ===== å­è¿‡ç¨‹ï¼šå®šä½åŒ…ç®¡ç†å™¨ï¼ˆå†…ç½® runtime ä¼˜å…ˆï¼Œå…¶æ¬¡ç³»ç»Ÿï¼‰=====
+rem ===== ×Ó¹ý³Ì£º¶¨Î»°ü¹ÜÀíÆ÷£¨ÄÚÖÃ runtime ÓÅÏÈ£¬Æä´ÎÏµÍ³£©=====
 :detect_pkgmgr
 if defined NODE_DIR (
     if exist "%NODE_DIR%\pnpm.cmd" (
@@ -64,12 +64,12 @@ goto :eof
 
 :no_pkgmgr
 echo.
-echo [é”™è¯¯] æœªæ‰¾åˆ° npm / pnpm å‘½ä»¤ã€‚
-echo è¯·å°† runtime\node ç›®å½•æ”¾å›žé¡¹ç›®åŽé‡è¯•ï¼Œæˆ–å®‰è£… Node.js LTS å¹¶åŠ å…¥ PATHã€‚
+echo [´íÎó] Î´ÕÒµ½ npm / pnpm ÃüÁî¡£
+echo Çë½« runtime\node Ä¿Â¼·Å»ØÏîÄ¿ºóÖØÊÔ£¬»ò°²×° Node.js LTS ²¢¼ÓÈë PATH¡£
 pause
 exit /b 1
 
 :error
 echo.
-echo å¯åŠ¨å¤±è´¥ï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹é”™è¯¯ä¿¡æ¯åŽé‡è¯•ã€‚
+echo Æô¶¯Ê§°Ü£¬Çë¼ì²éÉÏ·½´íÎóÐÅÏ¢ºóÖØÊÔ¡£
 exit /b 1

@@ -27,8 +27,12 @@ PYTHON=""
 for cand in "$ROOT/runtime/python/bin/python3" "$ROOT/runtime/python/python.exe"; do
   if [ -x "$cand" ]; then PYTHON="$cand"; break; fi
 done
-if [ -z "$PYTHON" ] && [ -x "/c/Users/lisax/.workbuddy/binaries/python/versions/3.13.12/python.exe" ]; then
-  PYTHON="/c/Users/lisax/.workbuddy/binaries/python/versions/3.13.12/python.exe"
+if [ -z "$PYTHON" ]; then
+  for cand in "$HOME/.workbuddy/binaries/python/versions/3.13.12/python.exe" \
+              "$USERPROFILE/.workbuddy/binaries/python/versions/3.13.12/python.exe" \
+              "/c/Users/$USERNAME/.workbuddy/binaries/python/versions/3.13.12/python.exe"; do
+    if [ -x "$cand" ]; then PYTHON="$cand"; break; fi
+  done
 fi
 if [ -z "$PYTHON" ]; then
   echo "[错误] 找不到 Python 3.13+。请将 runtime/python 目录放回项目后重试。"

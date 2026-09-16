@@ -11,6 +11,7 @@ venv/
 # Node
 node_modules/
 .tmp-cleanup/
+.tmp-*/
 dist/
 *.local
 # Vite 构建临时文件

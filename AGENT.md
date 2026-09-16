@@ -147,7 +147,7 @@ cd backend
 | 命令里出现 `$` | `$_`、`$var` 在部分 shell 会被吞 | 避免使用；必须用时写成 `.ps1` 脚本文件执行 |
 | 用 npm | `npm install` | `& '..\runtime\node\pnpm.cmd' install` |
 | 用系统 python | `python --version` | `& '..\runtime\python\python.exe' --version` |
-| 写绝对路径 | `C:\Users\lisax\...` | 一律相对路径 `..\runtime\...` |
+| 写绝对路径 | `C:\Users\<用户名>\...` | 一律相对路径 `..\runtime\...` |
 
 > 追加：若在 cmd 里执行且遇到 `系统找不到指定的路径`，先确认当前目录（`cd` 一下），相对路径要从正确目录出发（backend 命令在 `backend\` 下，前端命令在 `frontend\` 下）。
 
@@ -212,7 +212,7 @@ cd backend
 ```powershell
 # ❌
 python --version
-C:\Users\lisax\...\python.exe
+C:\Users\<用户名>\...\python.exe
 
 # ✅
 & '..\runtime\python\python.exe' --version

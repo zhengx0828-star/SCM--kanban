@@ -2,12 +2,12 @@
 rem ============================================
 rem  Product Manager - Backend Launcher
 rem  Starts FastAPI server on http://localhost:8000
-rem  è¿è¡Œæ—¶ï¼šé¡¹ç›®å†…ç½® runtime\pythonï¼ˆå…¨ç›¸å¯¹è·¯å¾„ï¼Œå¯æ•´ä½“æ¬ç§»ï¼‰
+rem  ÔËĞĞÊ±£ºÏîÄ¿ÄÚÖÃ runtime\python£¨È«Ïà¶ÔÂ·¾¶£¬¿ÉÕûÌå°áÒÆ£©
 rem ============================================
 setlocal
 cd /d "%~dp0..\backend"
 
-rem ===== å®šä½ Pythonï¼šé¡¹ç›®å†…ç½® runtime ä¼˜å…ˆï¼Œå›é€€ .workbuddy =====
+rem ===== ¶¨Î» Python£ºÏîÄ¿ÄÚÖÃ runtime ÓÅÏÈ£¬»ØÍË .workbuddy =====
 set "PYTHON=..\runtime\python\python.exe"
 if not exist "%PYTHON%" (
     if exist "%USERPROFILE%\.workbuddy\binaries\python\versions\3.13.12\python.exe" (
@@ -15,24 +15,24 @@ if not exist "%PYTHON%" (
     )
 )
 if not exist "%PYTHON%" (
-    echo [é”™è¯¯] æ‰¾ä¸åˆ° Python 3.13.12ã€‚
-    echo   å·²å°è¯•å†…ç½®: %~dp0..\runtime\python\python.exe
-    echo   è¯·å°† runtime\python ç›®å½•æ”¾å›é¡¹ç›®åé‡è¯•ã€‚
+    echo [´íÎó] ÕÒ²»µ½ Python 3.13.12¡£
+    echo   ÒÑ³¢ÊÔÄÚÖÃ: %~dp0..\runtime\python\python.exe
+    echo   Çë½« runtime\python Ä¿Â¼·Å»ØÏîÄ¿ºóÖØÊÔ¡£
     exit /b 1
 )
 
-rem ===== ä¾èµ–ç¼ºå¤±æ—¶æ‰å®‰è£…ï¼ˆå†…ç½‘å·²è£…åˆ™è·³è¿‡ï¼‰=====
+rem ===== ÒÀÀµÈ±Ê§Ê±²Å°²×°£¨ÄÚÍøÒÑ×°ÔòÌø¹ı£©=====
 if not exist "..\runtime\python\Lib\site-packages\fastapi" (
-    echo [1/2] å®‰è£…åç«¯ä¾èµ–ï¼ˆé¦–æ¬¡è¾ƒæ…¢ï¼‰...
+    echo [1/2] °²×°ºó¶ËÒÀÀµ£¨Ê×´Î½ÏÂı£©...
     "%PYTHON%" -m uv pip install -r requirements.txt --python "%PYTHON%" || goto :error
 )
 
-echo [2/2] å¯åŠ¨ FastAPI æœåŠ¡ http://localhost:8000 ...
-echo API æ–‡æ¡£: http://localhost:8000/docs
+echo [2/2] Æô¶¯ FastAPI ·şÎñ http://localhost:8000 ...
+echo API ÎÄµµ: http://localhost:8000/docs
 "%PYTHON%" -m uvicorn app.main:app --reload --port 8000
 goto :eof
 
 :error
 echo.
-echo å¯åŠ¨å¤±è´¥ï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹é”™è¯¯ä¿¡æ¯åé‡è¯•ã€‚
+echo Æô¶¯Ê§°Ü£¬Çë¼ì²éÉÏ·½´íÎóĞÅÏ¢ºóÖØÊÔ¡£
 exit /b 1
