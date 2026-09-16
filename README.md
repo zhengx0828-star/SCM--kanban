@@ -90,8 +90,8 @@
 
 - 仓库已推送到 GitHub：`https://github.com/zhengx0828-star/SCM--kanban.git`（origin，默认分支 `master`，本地已与远程建立追踪，增量同步迭代中）。
 - `runtime/`、`node_modules/`、`backend/products.db`、`.workbuddy/`、`.codebuddy/`、`*.db.bak-*`、`size_report.txt` 均已在 `.gitignore` 排除，**不进 git**（首次 clone 到内网后需按 6.1 方式 B 手动补拷 `runtime/`、`node_modules/`、`products.db` 这 3 项）。
-- **⚠️ 本机 GitHub 不可达（2026-09-16 实测）**：`curl https://github.com` → SSL 失败（http=000）；`git ls-remote origin` 超时。**本机直接 `git push` 会长时间卡死，不要反复重试**。改动先本地 commit，跨机中转用 `git bundle create <file> origin/master..master` 打包，拿到有网机器上 `git fetch <bundle> master` 后再 push（详见 9.5）。
-- 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`（push 可行时）。
+- **⚠️ 本机 git 需改 TLS 后端才能连上（2026-09-17 实测查清）**：根因是 git 默认 `sslBackend=openssl` 在本机 fake-IP 网络下 TLS 握手卡死；改为 `schannel` + `http.version=HTTP/1.1` + `http.proxy=`（三个都写进本仓库配置，已生效）后秒通，详见 9.5。仓库为 **public**，匿名可 clone，但 **push 需要凭证**；本机 Git Credential Manager 无已保存凭证，首次需在本机终端完成一次 GitHub 登录。
+- 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`（配置已固化，直接敲裸命令即可）。
 
 ---
 
@@ -113,7 +113,7 @@
 
 ## 五、内网网络说明（重要）
 
-> 你的内网是**访问受限**而非完全断网：常见站点可能通也可能被阻断，**规则不透明，需要自己试探**。**2026-09-16 实测：本机 GitHub 不可达（SSL 失败 + `git ls-remote` 超时），push 改走 bundle 中转（见 9.5）**。本项目的设计原则是：**默认离线可跑，需要联网时按「第八节」逐级尝试**。
+> 你的内网是**访问受限**而非完全断网：常见站点可能通也可能被阻断，**规则不透明，需要自己试探**。**2026-09-17 实测查清：本机 GitHub 完全可达，此前「不可达」是 git 默认 TLS 后端（openssl）在本机 fake-IP 网络下握手卡死所致，改用 schannel 即通（见 9.5）**。本项目的设计原则是：**默认离线可跑，需要联网时按「第八节」逐级尝试**。
 
 - **拷贝进内网后，无需任何网络即可启动 Demo**（`runtime/` + `node_modules/` 自带）。
 - 只有当你要**拉取新依赖 / clone GitHub 仓库**时才需要网络。
@@ -360,22 +360,45 @@ git push                  # 外网推送到 GitHub（本机不可用时走 9.5 b
 - **改代码前先 pull**：内网外网都可能改动，先 `git pull` 再动手，冲突面最小。
 - **AGENT.md 同步更新**：内网 AI 的认知全部来自 `AGENT.md` 和 `README.md`，任何环境/命令变化请同步更新这两份文档再提交。
 
-### 9.5 本机 GitHub 不可达时的 bundle 中转（2026-09-16 实测）
+### 9.5 本机 git 连 GitHub 的正确姿势（★ 2026-09-17 实测查清）
 
-本机直连 GitHub 失败（`http=000` + SSL 错误，`git ls-remote` 超时），**不要反复重试 push，会卡死**。改用「本地提交 + bundle 打包 + 有网机器代推」：
+**结论：本机 GitHub 完全可达**，问题出在 git 默认的 **TLS 后端（openssl）**在本机 fake-IP 网络下握手卡死。三个障碍，**第 3 条是根因**：
+
+| # | 障碍 | 现象 | 解决 |
+| --- | --- | --- | --- |
+| 1 | 代理不通 | 环境有 `http_proxy/https_proxy=http://127.0.0.1:55144`，而该代理**到 GitHub 不通**（`curl -x` 它 → `http=000`） | `http.proxy=` 置空 |
+| 2 | fake-IP + HTTP/2 | `github.com` 解析到 `198.18.0.22`（fake-IP 网段，本地 TUN 接管），对 HTTP/2 不友好 | `http.version=HTTP/1.1` |
+| 3 | **★ TLS 后端（根因）** | 默认 `sslBackend=openssl`，TLS 握手发完 ClientHello 后**永远等不到 ServerHello**（`GIT_TRACE_CURL` 可见停在 `Send SSL data`） | `http.sslBackend=schannel` |
 
 ```powershell
-# 1) 先确认改动已本地提交
-git log --oneline origin/master..master
+# 推荐：一次性写入本仓库配置（之后裸命令即可用，实测裸 git ls-remote 秒回）
+git config http.sslBackend schannel
+git config http.version HTTP/1.1
+git config http.proxy ""
 
-# 2) 打包未推送的提交为 bundle 文件
+# 连通性自检：能看到 refs/heads/master 即通道正常
+git ls-remote --heads origin
+
+# 之后正常拉取 / 推送
+git pull  origin master
+git push  origin master
+```
+
+不想改配置时的等价写法（三个参数都要带）：
+`git -c http.sslBackend=schannel -c http.version=HTTP/1.1 -c http.proxy= ls-remote --heads origin`
+
+> **诊断口诀**：`curl --noproxy '*' -I https://github.com` 通、但 git 卡死 → 不是网络问题，是 git 自身；再 `GIT_TRACE_CURL=1 git ls-remote origin`，停在 ClientHello 之后 → **换 schannel**。
+
+**认证**：push 需要 GitHub 凭证。本机 Git Credential Manager 中**没有已保存凭证**（`git credential fill` 返回空）。首次 push 需在**本机终端**执行，在弹出窗口完成 GitHub 登录授权，凭证存入 Windows 凭据管理器后无需重复。headless / 沙箱会话里 GCM 弹不出交互窗口，**登录这一步必须由用户在本机终端完成**。
+
+> 仓库当前为 **public**（`zhengx0828-star/SCM--kanban`，默认分支 `master`），匿名可 fetch/clone；但 push 始终需要凭证。
+
+**离线兜底（通道确实不通时）**：本地提交后用 bundle 中转 ——
+
+```powershell
 git bundle create D:\unpushed.bundle origin/master..master
 git bundle verify D:\unpushed.bundle     # 应输出 "is okay"
-
-# 3) 拿到有网机器上取回并推送
-git fetch D:\unpushed.bundle master
-git merge FETCH_HEAD                      # 或按需 rebase
-git push
+# 有网机器上：git fetch D:\unpushed.bundle master && git push
 ```
 
 纯文本审阅场景也可用 `git format-patch --no-binary origin/master..master` 生成补丁文件带走。

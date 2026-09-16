@@ -120,23 +120,39 @@ git log --oneline origin/master..master   # 看本地领先远程多少提交
 > 本机未配置 git 身份时提交会失败；可用一次性参数提交（不改配置文件）：
 > `git -c user.name="scm-kanban" -c user.email="scm-kanban@localhost" commit -m "..."`
 
-**推送前必读（本机 GitHub 不通，2026-09-16 实测）**：直接 `git push` 会长时间无响应卡死，**先探测再推**：
+**推送前必读（2026-09-17 实测查清：GitHub 完全可达，是 git 的默认 TLS 后端在本机卡死）**：
+
+本机有三个隐形障碍，**决定性因素是第 3 条**，三个都处理才能稳定连通：
+
+1. **沙箱代理**：环境变量里有 `http_proxy/https_proxy=http://127.0.0.1:55144`，该代理**到 GitHub 是不通的**（实测 `curl -x` 该代理 → `http=000`）。git 若走它必卡死 → 需 `http.proxy=` 置空。
+2. **fake-IP 域名**：`github.com` 被解析到 `198.18.0.22`（fake-IP 网段，本地 TUN 接管）。该 TUN 对 HTTP/2 不友好 → 需 `http.version=HTTP/1.1`。
+3. **★ TLS 后端（根因）**：git 默认 `http.sslBackend=openssl`，本机 OpenSSL 与 fake-IP TUN 组合下 **TLS 握手发完 ClientHello 就永远等不到 ServerHello**（`GIT_TRACE_CURL` 可复现：卡在 `Send SSL data` 之后）。换成 Windows 原生 **schannel** 后**秒通**（`ls-remote` 1 秒内返回）。
 
 ```powershell
-# 探一下能不能连上（两个都要看）
-curl.exe -s -o NUL -w "http=%{http_code} time=%{time_total}s`n" --max-time 10 https://github.com
-git ls-remote --heads origin    # 能列出分支才说明能推
+# 一次性写入本仓库配置（推荐，之后裸命令即可用；实测裸 git ls-remote 已秒回）
+git config http.sslBackend schannel
+git config http.version HTTP/1.1
+git config http.proxy ""
+
+# 连通性自检（能看到 refs/heads/master 即正常）
+git ls-remote --heads origin
 ```
 
-判读：`http=000` + `curl` 非 0 退出（SSL 失败）＋ `git ls-remote` 超时 = **不通，别推了**。
-此时改为**本地提交 + bundle 中转**，拿到有网机器上再推：
+若不想改配置，等价写法（三个参数都要带）：
 
 ```powershell
-# 打包未推送的提交
-git bundle create D:\unpushed.bundle origin/master..master
-git bundle verify D:\unpushed.bundle     # 应输出 "is okay"
-# 有网机器上执行：git fetch D:\unpushed.bundle master  然后 git push
+git -c http.sslBackend=schannel -c http.version=HTTP/1.1 -c http.proxy= ls-remote --heads origin
 ```
+
+**认证**：push 需要 GitHub 凭证。本机 Git Credential Manager 中**没有已保存凭证**（`git credential fill` 返回空），首次需在**本机终端**执行 push，在弹出的 GitHub 登录窗口完成授权，凭证存入 Windows 凭据管理器后即无需重复。**headless / 沙箱会话里 GCM 弹不出交互窗口，登录这一步只能由用户在自己终端完成。**
+
+> 诊断要点（下次再遇到「git 连不上但 curl 正常」照此排查）：
+> ① `curl --noproxy '*' -I https://github.com` 通 → 网络没问题，问题在 git 自身；
+> ② `GIT_TRACE_CURL=1 git ls-remote origin`：若停在 `Send SSL data`（ClientHello）后无 `Recv` → **换 `http.sslBackend=schannel`**；
+> ③ 还不行再加 `http.version=HTTP/1.1`、`http.proxy=`。
+>
+> 旧结论（2026-09-16「GitHub 完全不可达、只能 bundle 中转」）已被推翻；确需离线中转时仍可用 bundle：
+> `git bundle create D:\unpushed.bundle origin/master..master`（有网机器 `git fetch <bundle> master`）。
 
 ### 2.6 网络探测 / 换源
 
@@ -358,7 +374,8 @@ for f in ['start-all.bat','scripts/start-backend.bat','scripts/start-frontend.ba
 
 | 日期 | 源 | 是否可用 | 备注 |
 | --- | --- | --- | --- |
-| 2026-09-16 | github.com (443) | ❌ **不通** | `curl --noproxy '*' https://github.com` → `http=000` exit 35（SSL 失败，10s 超时）；`git ls-remote origin` 25s 超时 exit 124。**本机 push 不可行，别反复重试** |
+| 2026-09-17 | github.com (443) | ✅ **通** | 根因查明：git 默认 `sslBackend=openssl` 在本机 fake-IP(198.18.0.22) 网络下 TLS 握手卡死。改 `http.sslBackend=schannel` + `http.version=HTTP/1.1` + `http.proxy=` 后裸命令秒回 `refs/heads/master`；`curl --noproxy '*' https://github.com` → `http=200`(0.4s)。**详见「2.5 推送前必读」** |
+| 2026-09-16 | github.com (443) | ❌ 误判为不通 | 当时裸 `git ls-remote`（openssl + 走沙箱代理 + HTTP/2）25s 超时、`curl` 未加 `--noproxy` 得 `http=000`。**根因已在 2026-09-17 查明** |
 | | registry.npmjs.org | | |
 | | registry.npmmirror.com | | |
 | | pypi.org | | |
@@ -366,7 +383,7 @@ for f in ['start-all.bat','scripts/start-backend.bat','scripts/start-frontend.ba
 | | nodejs.org | | |
 | | ghproxy.com | | |
 
-> 本机无法 push 时的替代做法：本地 commit 后用 `git bundle create <file> origin/master..master` 打包，拿到有网机器上 `git fetch <file> master` 即可取回提交。
+> 通道确实不通时的替代做法：本地 commit 后用 `git bundle create <file> origin/master..master` 打包，拿到有网机器上 `git fetch <file> master` 即可取回提交。
 
 ---
 
