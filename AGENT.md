@@ -14,6 +14,7 @@
 4. **前端一律用 `pnpm`**（`..\runtime\node\pnpm.cmd`），**不要用 npm**（会忽略 `pnpm-lock.yaml`）。
 5. **Windows 转义**：PowerShell 中调用带路径命令用单引号 `& '..\runtime\python\python.exe' ...`；命令里尽量不含 `$` 符号；cmd 中路径带空格用 `""` 包裹。
 6. **内网优先离线**：项目已自带全部运行时和依赖，**先保证能跑起来**，网络问题按「第五节」逐级试探，不要死磕。
+7. **改 `.bat` 必须保持 GBK(cp936) + CRLF**：`start-all.bat`、`scripts\*.bat` 三个文件存的是 **GBK 编码**。**用编辑器或脚本按 UTF-8 保存会立刻炸** —— 双击后刷一屏「不是内部或外部命令」，用户会直接判定「项目无法运行」。原因与改法见「六、坑 7」，**这是本项目最容易被无意破坏的地方**。
 
 ---
 
@@ -111,12 +112,31 @@ git status                 # 看改动
 git add -A
 git commit -m "描述改动"
 git pull                   # 内网拉取（先 pull 再动手）
-git push                   # 外网推送
+git push                   # 外网推送 —— 见下方「推送前必读」
 git log --oneline -5       # 看最近提交
+git log --oneline origin/master..master   # 看本地领先远程多少提交
 ```
 
 > 本机未配置 git 身份时提交会失败；可用一次性参数提交（不改配置文件）：
 > `git -c user.name="scm-kanban" -c user.email="scm-kanban@localhost" commit -m "..."`
+
+**推送前必读（本机 GitHub 不通，2026-09-16 实测）**：直接 `git push` 会长时间无响应卡死，**先探测再推**：
+
+```powershell
+# 探一下能不能连上（两个都要看）
+curl.exe -s -o NUL -w "http=%{http_code} time=%{time_total}s`n" --max-time 10 https://github.com
+git ls-remote --heads origin    # 能列出分支才说明能推
+```
+
+判读：`http=000` + `curl` 非 0 退出（SSL 失败）＋ `git ls-remote` 超时 = **不通，别推了**。
+此时改为**本地提交 + bundle 中转**，拿到有网机器上再推：
+
+```powershell
+# 打包未推送的提交
+git bundle create D:\unpushed.bundle origin/master..master
+git bundle verify D:\unpushed.bundle     # 应输出 "is okay"
+# 有网机器上执行：git fetch D:\unpushed.bundle master  然后 git push
+```
 
 ### 2.6 网络探测 / 换源
 
@@ -257,6 +277,60 @@ C:\Users\<用户名>\...\python.exe
 # 双向开发纪律：改任何代码前先 git pull；push 前先 git status 看清改动
 ```
 
+### 坑 7：★ 把 `.bat` 存成了 UTF-8（本机最致命的坑）
+
+**症状**：双击 `start-all.bat` 后刷出一屏红字，中文注释被拆碎当命令执行：
+
+```
+'n.exe（内置，优先；后端依赖已装入…' 不是内部或外部命令
+'找不到时回退' 不是内部或外部命令
+'端页面:' 不是内部或外部命令
+timeout: invalid time interval '/t'
+```
+
+脚本其实还会继续往下跑，但用户看到满屏报错，**直接判定「项目无法运行」** —— 2026-09-16 排查「项目无法运行」就是栽在这里。
+
+**根因**：中文 Windows 控制台**活动代码页 = 936(GBK)**。cmd.exe 是**逐行按当前代码页解析**批处理文件的，若 .bat 存成 UTF-8 且含中文，字节边界在 cp936 下错位，注释碎片就被当成命令。行内 `chcp 65001` 更会让后续行读取偏移错乱（所以连末尾的 `echo` 行也会炸）。
+
+**诊断**：
+
+```powershell
+chcp.com                       # 看活动代码页，中文 Windows 应为 936
+# 逐文件检查编码与行尾
+& 'runtime\python\python.exe' -c "
+for f in ['start-all.bat','scripts/start-backend.bat','scripts/start-frontend.bat']:
+    d=open(f,'rb').read()
+    try: d.decode('gbk'); g='GBK-OK'
+    except: g='GBK-FAIL'
+    try: d.decode('utf-8'); u='仍UTF-8可解(危险)'
+    except: u='非UTF-8-OK'
+    crlf=d.count(b'\r\n'); lf=d.count(b'\n')-crlf
+    print('%-28s %-9s %-16s CRLF=%d 裸LF=%d' % (f,g,u,crlf,lf))
+"
+```
+
+**修复（三件事，缺一不可）**：
+
+```powershell
+# 1) 编码 UTF-8 -> GBK，行尾统一 CRLF；务必用 Python 转换
+& 'runtime\python\python.exe' -c "
+import io
+for f in ['start-all.bat','scripts/start-backend.bat','scripts/start-frontend.bat']:
+    t=open(f,encoding='utf-8').read()
+    lines=[l.rstrip('\r') for l in t.split('\n')]
+    open(f,'wb').write('\r\n'.join(lines).encode('gbk'))
+    print('converted', f)
+"
+# 2) 删掉文件里所有 chcp 65001（控制台本来就是 936，切换反而破坏解析）
+# 3) 行尾必须 CRLF —— 纯 LF 会让标签 / goto 解析异常
+```
+
+**不要用编辑器「另存为 UTF-8」，也不要让 AI 用普通文本编辑工具直接改 `.bat`** —— 那些工具默认按 UTF-8 写盘，改一个字就毁掉整个文件。改 `.bat` 请走上面的 Python 转换流程。
+
+**顺带**：`.bat` 内调 `timeout` 要写 `"%SystemRoot%\System32\timeout.exe" /t 6`，否则 PATH 里有 Git Bash 时会解析成 GNU timeout，报 `invalid time interval '/t'`。
+
+**验证**：重跑脚本，按 cp936 解码输出，确认七类签名**全部消失**：`不是内部或外部命令` / `is not recognized` / `invalid time interval` / `系统找不到` / `未被识别` / `Syntax error` / `The syntax of the command`。
+
 ---
 
 ## 七、快速诊断清单（内网启动失败时按顺序查）
@@ -271,6 +345,10 @@ C:\Users\<用户名>\...\python.exe
 | 6. 数据库 | `Test-Path backend\products.db` | `True`（无则自动建空表，不影响启动） |
 | 7. 后端端口 | `curl.exe -s http://127.0.0.1:8000/api/health` | `{"status":"ok",...}` |
 | 8. 前端端口 | `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:5173` | `200` |
+| 9. 启动脚本编码 | 见「六、坑 7」的编码检查命令 | 三个 `.bat` 均 `GBK-OK` / `非UTF-8-OK` / `裸LF=0` |
+| 10. 手动绕过脚本 | `cd backend` 后 `& '..\runtime\python\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000` | 能起则问题在脚本，不在项目 |
+
+> **判据**：若第 7、8 步不通，但第 10 步手动能起服务 → 说明**项目本身没问题，是启动脚本坏了**，优先查第 9 步的 `.bat` 编码，不要浪费时间重装依赖。
 
 ---
 
@@ -280,13 +358,15 @@ C:\Users\<用户名>\...\python.exe
 
 | 日期 | 源 | 是否可用 | 备注 |
 | --- | --- | --- | --- |
-| | github.com (443) | | |
+| 2026-09-16 | github.com (443) | ❌ **不通** | `curl --noproxy '*' https://github.com` → `http=000` exit 35（SSL 失败，10s 超时）；`git ls-remote origin` 25s 超时 exit 124。**本机 push 不可行，别反复重试** |
 | | registry.npmjs.org | | |
 | | registry.npmmirror.com | | |
 | | pypi.org | | |
 | | pypi.tuna.tsinghua.edu.cn | | |
 | | nodejs.org | | |
 | | ghproxy.com | | |
+
+> 本机无法 push 时的替代做法：本地 commit 后用 `git bundle create <file> origin/master..master` 打包，拿到有网机器上 `git fetch <file> master` 即可取回提交。
 
 ---
 
