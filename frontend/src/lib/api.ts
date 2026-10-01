@@ -52,11 +52,17 @@ import type {
   ShareSummary,
 } from "../types/share";
 import type {
+  BaseSite,
+  BaseSiteInput,
+  InventoryBulkCreateResult,
+  InventoryCandidate,
   InventoryDayUpdateInput,
   InventoryFilter,
   InventoryPlan,
+  InventoryPlanCreateInput,
   InventoryPlanUpdateInput,
   InventoryImportResult,
+  InventoryProjectOverview,
   InventorySummary,
 } from "../types/inventory";
 
@@ -321,9 +327,43 @@ export const shareApi = {
 };
 
 export const inventoryApi = {
-  /** 推算单元列表（含 30 天矩阵；safe/excess 影响预警判定） */
+  /** 推算单元列表（含 30 天矩阵 / 补货建议 / 产能校验；service_z、excess 影响判定） */
   plans(filters: InventoryFilter = {}) {
     return apiClient.get<InventoryPlan[]>("/inventory/plans", { params: filters }).then((res) => res.data);
+  },
+
+  /** 项目级 DOH 概览（L0 项目卡片墙；不含物料明细，体积与项目数无关） */
+  projectOverview(params: { service_z?: number; excess?: number } = {}) {
+    return apiClient
+      .get<InventoryProjectOverview[]>("/inventory/project-overview", { params })
+      .then((res) => res.data);
+  },
+
+  /** 导出当前筛选视图为 xlsx（返回 Blob，由 hook 触发下载） */
+  export(params: InventoryFilter = {}) {
+    return apiClient.get<Blob>("/inventory/export", { params, responseType: "blob" }).then((res) => res.data);
+  },
+
+  /** 底表中尚可建档的「项目 × 物料 × 供应商」组合 */
+  candidates(projectIds = "") {
+    return apiClient
+      .get<InventoryCandidate[]>("/inventory/candidates", { params: { project_ids: projectIds } })
+      .then((res) => res.data);
+  },
+
+  /** 新建单个库存档案（与底表联动，自动带出客户需求 × BOM） */
+  createPlan(data: InventoryPlanCreateInput) {
+    return apiClient.post<InventoryPlan>("/inventory/plans", data).then((res) => res.data);
+  },
+
+  /** 批量建档 */
+  bulkCreatePlans(items: InventoryPlanCreateInput[]) {
+    return apiClient.post<InventoryBulkCreateResult>("/inventory/plans/bulk", { items }).then((res) => res.data);
+  },
+
+  /** 删除库存档案（级联清掉其手工修正） */
+  removePlan(id: number) {
+    return apiClient.delete(`/inventory/plans/${id}`).then((res) => res.data);
   },
 
   /** 顶部 KPI 四卡（当前筛选视图，按 PN 去重） */
@@ -332,13 +372,13 @@ export const inventoryApi = {
   },
 
   /** 改 LeadTime / 初始现有库存（左冻结列） */
-  updatePlan(id: number, data: InventoryPlanUpdateInput) {
-    return apiClient.patch<InventoryPlan>(`/inventory/plans/${id}`, data).then((res) => res.data);
+  updatePlan(id: number, data: InventoryPlanUpdateInput, params: InventoryFilter = {}) {
+    return apiClient.patch<InventoryPlan>(`/inventory/plans/${id}`, data, { params }).then((res) => res.data);
   },
 
   /** 批量改某日单元格（落库即重算，返回整行新矩阵） */
-  updateDays(id: number, cells: InventoryDayUpdateInput[]) {
-    return apiClient.put<InventoryPlan>(`/inventory/plans/${id}/days`, cells).then((res) => res.data);
+  updateDays(id: number, cells: InventoryDayUpdateInput[], params: InventoryFilter = {}) {
+    return apiClient.put<InventoryPlan>(`/inventory/plans/${id}/days`, cells, { params }).then((res) => res.data);
   },
 
   /** Excel 导入（服务端本地文件路径） */
@@ -346,5 +386,24 @@ export const inventoryApi = {
     return apiClient
       .post<InventoryImportResult>("/inventory/import", null, { params: { file_path: filePath } })
       .then((res) => res.data);
+  },
+};
+
+export const baseApi = {
+  /** 基地主数据列表（含被库存档案引用的计数） */
+  list() {
+    return apiClient.get<BaseSite[]>("/bases").then((res) => res.data);
+  },
+
+  create(data: BaseSiteInput) {
+    return apiClient.post<BaseSite>("/bases", data).then((res) => res.data);
+  },
+
+  update(id: number, data: Partial<BaseSiteInput>) {
+    return apiClient.patch<BaseSite>(`/bases/${id}`, data).then((res) => res.data);
+  },
+
+  remove(id: number) {
+    return apiClient.delete(`/bases/${id}`).then((res) => res.data);
   },
 };

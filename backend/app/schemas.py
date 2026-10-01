@@ -123,6 +123,44 @@ class SupplierRead(SupplierBase):
 
 
 # ---------------------------------------------------------------------------
+# L1 基地主数据
+# ---------------------------------------------------------------------------
+
+
+class BaseSiteBase(BaseModel):
+    """基地公共字段。"""
+
+    code: str = Field(..., min_length=1, max_length=32, examples=["CZ"])
+    name: str = Field(..., min_length=1, max_length=100, examples=["常州"])
+    city: Optional[str] = Field(None, max_length=100, examples=["常州"])
+    remark: Optional[str] = Field(None, max_length=2000)
+
+
+class BaseSiteCreate(BaseSiteBase):
+    """新增基地请求体。"""
+
+
+class BaseSiteUpdate(BaseModel):
+    """更新基地请求体（仅传需要修改的字段）。"""
+
+    code: Optional[str] = Field(None, min_length=1, max_length=32)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    city: Optional[str] = Field(None, max_length=100)
+    remark: Optional[str] = Field(None, max_length=2000)
+
+
+class BaseSiteRead(BaseSiteBase):
+    """基地响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    plan_count: int = 0  # 引用该基地的库存档案数（删除前提示用）
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # L1 物料主数据
 # ---------------------------------------------------------------------------
 
@@ -386,11 +424,15 @@ WEIGHT_SCHEMES = {
 RISK_FLUCTUATION_RATIO = 0.3  # 份额波动预警：本月系统份额相对上期变化 ≥ ±30%（≥ 上期×1.3 或 ≤ 上期×0.7）
 RISK_DEVIATION_PT = 5         # 建议偏差预警：|本月 − 上月建议| > 5 个百分点
 
+# 月份校验：必须 01-12。旧写法 ^\d{4}-\d{2}$ 会放行 2026-00 / 2026-13，
+# 这类月份能写进库，而 dashboard-stats 取 max(month) 时会跳到空月份、把当月风险整片遮住。
+MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
+
 
 class ShareRecordBase(BaseModel):
     """份额记录公共字段。"""
 
-    month: str = Field(..., pattern=r"^\d{4}-\d{2}$", examples=["2026-08"], description="月份快照（YYYY-MM）")
+    month: str = Field(..., pattern=MONTH_PATTERN, examples=["2026-08"], description="月份快照（YYYY-MM）")
     share_current: Optional[float] = Field(None, ge=0, le=100, description="本月系统份额（%）")
     q_score: Optional[float] = Field(None, description="质量评分（五档：1/0.7/0.5/0.3/0）")
     d_score: Optional[float] = Field(None, description="交付评分（五档）")
@@ -594,12 +636,49 @@ class RuleListResponse(BaseModel):
 # 库存信号塔：动态库存与 DOH 风险监控看板（规则页「库存管理」SOP 同步维护）
 # ---------------------------------------------------------------------------
 INV_WINDOW_DAYS = 30            # 日度推算窗口（未来 30 天滚动）
-INV_COV_MID = 0.35              # 历史需求波动分档：COV < 0.35 低 / [0.35, 0.8) 中 / ≥ 0.8 高
+INV_COV_MID = 0.35              # 需求波动分档：COV < 0.35 低 / [0.35, 0.8) 中 / ≥ 0.8 高
 INV_COV_HI = 0.8
-INV_SAFE_DOH_DEFAULT = 5        # 目标安全天数（前端可调，默认 5 天：顶部漏斗「今日亮灯」即 DOH<5）
+INV_SAFE_DOH_DEFAULT = 5        # 安全天数兜底值：COV 不可算（需求样本 < 2 个月）时回退用
+INV_URGENT_DOH_THRESHOLD = 3    # 紧急档绝对阈值：DOH < 该值一律判「紧急」，不依赖安全天数
 INV_EXCESS_DOH_DEFAULT = 30     # 过剩库存天数（DOH > 该值 = 蓝灯积压，默认 30）
 INV_YELLOW_RATIO = 1.25         # 黄灯带 = 安全天数 × 100%~125%（DOH 贴近安全线）
-INV_MIN_HIST_MONTHS = 2         # 历史需求少于 2 个月不计算 COV
+INV_MIN_HIST_MONTHS = 2         # 需求样本少于 2 个月不计算 COV
+
+# 安全天数公式：安全天数 = Z × COV × √LT（标准统计式，Z 为服务水平系数）
+INV_Z_DEFAULT = 1.65            # 默认 Z：95% 服务水平
+INV_SERVICE_LEVEL_OPTIONS = {   # 常用服务水平 ↔ Z 对照（前端联动展示）
+    "90%": 1.28,
+    "95%": 1.65,
+    "97.5%": 1.96,
+    "99%": 2.33,
+}
+
+# 产能校验分档（占用率 = 建议补货量 ÷ 该项目当月分配额度）
+INV_CAPACITY_OK = "ok"          # 占用 ≤ 70%：产能充足
+INV_CAPACITY_TIGHT = "tight"    # 占用 70%~100%：产能紧张
+INV_CAPACITY_SHORT = "short"    # 占用 > 100%：超出额度，产能不足
+INV_CAPACITY_NA = "na"          # 未录入额度，无法校验
+INV_CAPACITY_TIGHT_RATIO = 0.7  # 紧张阈值
+INV_CAPACITY_FULL_RATIO = 1.0   # 不足阈值
+
+# 需求数据来源
+INV_SOURCE_MASTER = "master"      # 与底表联动：客户需求 × BOM 系数
+INV_SOURCE_SNAPSHOT = "snapshot"  # 使用档案自带快照（Excel 导入 / 早期手工录入）
+
+# 顶部四卡口径：今日 DOH 四档（唯一判定入口 = routers/inventory.py::_doh_bucket_of）
+# 与「预警状态（每格颜色）」是两套口径：颜色看期末/SS/安全线，四卡只看今日 DOH。
+INV_DOH_BUCKET_STOCKOUT = "stockout"   # ① 库存耗尽：DOH <= 0（或今日已断货）
+INV_DOH_BUCKET_URGENT = "urgent"       # ② 紧急：0 < DOH < 安全天数
+INV_DOH_BUCKET_LOW = "low"             # ③ 偏低：安全天数 <= DOH < LeadTime
+INV_DOH_BUCKET_OK = "ok"               # ④ 充足：DOH >= LeadTime
+INV_DOH_BUCKET_UNKNOWN = "unknown"     # ⑤ 无法评估：需求不可用三档（缺需求 / BOM=0 / 需求为 0）
+INV_DOH_BUCKET_ORDER = (               # 展示顺序（越靠前越紧急）
+    INV_DOH_BUCKET_STOCKOUT,
+    INV_DOH_BUCKET_URGENT,
+    INV_DOH_BUCKET_LOW,
+    INV_DOH_BUCKET_OK,
+    INV_DOH_BUCKET_UNKNOWN,
+)
 
 # 预警状态（判定优先级从高到低，同一格只落一种）
 INV_STATUS_STOCKOUT = "stockout"   # 深红：期末库存 ≤ 0（已断货）
@@ -612,7 +691,7 @@ INV_STATUS_OK = "ok"               # 正常
 INV_COV_LABEL_HIGH = "high"
 INV_COV_LABEL_MID = "mid"
 INV_COV_LABEL_LOW = "low"
-INV_COV_LABEL_NA = "na"            # 历史数据不足（< 2 个月）
+INV_COV_LABEL_NA = "na"            # COV 不可算：历史样本 < 2 个月，或需求均值 ≤ 0（0 ÷ 0）
 
 
 class InventoryMonthQty(BaseModel):
@@ -639,25 +718,94 @@ class InventoryCellOut(BaseModel):
 
 
 class InventoryPlanOut(BaseModel):
-    """推算单元 + 30 天矩阵（页面主表一行的完整数据）。"""
+    """推算单元 + 30 天矩阵 + 补货建议 + 产能校验（页面主表一行的完整数据）。"""
 
     id: int
     project_id: int
     project_code: str
     project_name: str
-    base: str
+    supplier_id: int
+    supplier_name: str
+    supplier_code: str
+    base_id: int
+    base_name: str
     material_id: int
     pn: str
     material_name: str
     lead_time_days: float
     on_hand: float
-    cov: float | None             # None = 历史数据不足
+
+    # ---- 需求与波动 ----
+    demand_source: str            # INV_SOURCE_*：master=底表联动 / snapshot=档案快照
+    bom_factor: float | None      # 底表 BOM 系数（快照模式为 None）
+    demand_blank: bool = False    # 需求序列存在但窗口日均需求 ≈ 0（漏录 / 客户需求为 0）
+    bom_zero: bool = False        # 底表联动且 BOM 系数显式为 0（需求被乘成 0）
+    cov: float | None             # 需求波动系数；None = 样本不足或均值为 0
     cov_label: str                # INV_COV_LABEL_*
     avg_daily: float              # 未来窗口内日均需求（SS 基数）
-    ss: float                     # 动态安全库存数量
     hist: list[InventoryMonthQty]
     fcast: list[InventoryMonthQty]
+
+    # ---- 安全库存口径（规则页 SOP）----
+    service_z: float              # 服务水平系数 Z
+    safe_days: float              # 安全天数 = Z × COV × √LT（COV 不可算时回退 INV_SAFE_DOH_DEFAULT）
+    safe_days_derived: bool       # True=由公式推导；False=COV 不可算、回退兜底值
+    ss: float                     # 安全库存 = 日均需求 × 安全天数
+    rop: float                    # 再订货点 = (LT + 安全天数) × 日均需求
+
+    # ---- 补货建议（窗口内实际跌破 ROP 才给建议，否则为 None）----
+    replenish_qty: float | None       # 建议补货量 = 一个周期量，即 ROP
+    order_by_date: str | None         # 最晚下单日（库存首次跌破 ROP 之日）
+    stockout_date: str | None         # 预计耗尽日（期末首次 ≤ 0）
+    days_until_order: int | None      # 距最晚下单日的天数（= 窗口下标，0 = 今天必须下单；不会为负）
+
+    # ---- 产能校验（建议补货量 vs 该项目当月分配额度）----
+    capacity_limit: float | None      # 该项目在该供应商处的当月分配额度
+    capacity_used: float | None       # 供应商当月总产能（用于展示占比）
+    capacity_usage: float | None      # 占用率 = 补货量 ÷ 分配额度
+    capacity_status: str              # INV_CAPACITY_*
+    capacity_month: str | None        # 校验所取月份（YYYY-MM）
+
+    doh_bucket: str = ""              # 顶部四卡档位（INV_DOH_BUCKET_*）：后端判定，前端直接用
+    doh_today: float | None = None    # 今日 DOH（capped 按窗口长度），四卡/排序/展示共用
+
     days: list[InventoryCellOut]  # 长度 = 30（窗口随今天滚动）
+
+
+class InventoryDohBuckets(BaseModel):
+    """今日 DOH 四档分布（顶部四卡口径，键为 INV_DOH_BUCKET_*）。"""
+
+    stockout: int = 0
+    urgent: int = 0
+    low: int = 0
+    ok: int = 0
+    unknown: int = 0
+    # 「无法评估」三种成因的细分计数（灰卡 hint 用，三者和 = unknown）
+    unknown_no_series: int = 0   # 缺需求数据：hist / fcast 皆空
+    unknown_bom_zero: int = 0    # BOM 系数显式为 0
+    unknown_demand_blank: int = 0  # 有序列但窗口日均 ≈ 0
+
+
+class InventoryMostUrgent(BaseModel):
+    """项目内最紧急的推算单元（用于项目卡片第四行）。"""
+
+    material_name: str
+    pn: str
+    base_name: str
+    doh: float
+    bucket: str  # INV_DOH_BUCKET_*
+
+
+class InventoryProjectOverview(BaseModel):
+    """项目级 DOH 概览（L0 项目卡片墙数据，不含任何物料明细）。"""
+
+    project_id: int
+    project_code: str
+    project_name: str
+    plan_count: int              # 推算单元（行）数
+    material_count: int          # 物料数（按 PN 去重）
+    doh_buckets: InventoryDohBuckets
+    most_urgent: InventoryMostUrgent | None = None  # 全部无法评估时为 None
 
 
 class InventorySummary(BaseModel):
@@ -674,19 +822,21 @@ class InventorySummary(BaseModel):
 class InventoryDayUpdate(BaseModel):
     """单日单元格批量更新项（全格可编辑；值为 None 表示清空该覆盖字段）。"""
 
-    date: str                     # YYYY-MM-DD
-    demand_override: float | None = None   # 改系统预测需求格；None=不改动
-    manual_demand: float | None = None     # 改手工修正需求；None=不改动（0=清空）
-    manual_in: float | None = None         # 改手工修正入库；None=不改动（0=清空）
-    ending_override: float | None = None   # 直接改期末库存；None=不改动
-    doh_target: float | None = None        # 编辑 DOH 格：按目标天数反推所需期末库存（覆盖）
+    date: str                      # YYYY-MM-DD
+    # 上下限是「防手滑打字」而非业务上限：超量级输入（如 -1e12）会让期末库存与
+    # DOH 反推被拉爆，前端还会显示出格的长度。
+    demand_override: float | None = Field(None, ge=-1e9, le=1e9)   # 改系统预测需求格；None=不改动
+    manual_demand: float | None = Field(None, ge=-1e9, le=1e9)     # 改手工修正需求；None=不改动（0=清空）
+    manual_in: float | None = Field(None, ge=-1e9, le=1e9)         # 改手工修正入库；None=不改动（0=清空）
+    ending_override: float | None = Field(None, ge=-1e9, le=1e9)   # 直接改期末库存；None=不改动
+    doh_target: float | None = Field(None, ge=0, le=365)           # 编辑 DOH 格：按目标天数反推期末库存
 
 
 class InventoryPlanUpdate(BaseModel):
     """推算单元级更新（左冻结列：LeadTime / 初始现有库存 可双击改）。"""
 
     lead_time_days: float | None = Field(None, gt=0)
-    on_hand: float | None = None
+    on_hand: float | None = Field(None, ge=0, description="初始现有库存（不允许负数）")
 
 
 class InventoryImportResult(BaseModel):
@@ -695,3 +845,45 @@ class InventoryImportResult(BaseModel):
     imported: int = 0             # 新增推算单元
     updated: int = 0              # 已存在被更新（系统数据刷新 + 手工修正清空重建）
     errors: list[str] = []
+
+
+class InventoryPlanCreate(BaseModel):
+    """新建库存档案：从底表选定「项目 × 物料 × 供应商」，并指定收货基地。"""
+
+    project_id: int
+    material_id: int
+    supplier_id: int
+    base_id: int
+    lead_time_days: float = Field(7, gt=0, description="采购提前期（天）")
+    on_hand: float = Field(0, ge=0, description="初始现有库存")
+
+
+class InventoryCandidate(BaseModel):
+    """底表中「项目 × 物料 × 供应商」组合（用于批量选取建档）。"""
+
+    project_id: int
+    project_code: str
+    project_name: str
+    material_id: int
+    pn: str
+    material_name: str
+    supplier_id: int
+    supplier_code: str
+    supplier_name: str
+    bom_factor: float | None            # 底表 BOM 系数（为空则需求无法推算）
+    demand_months: int                  # 底表已录入的客户需求月份数
+    planned_base_ids: list[int] = Field(default_factory=list)  # 已建档的基地，避免重复建
+
+
+class InventoryBulkCreate(BaseModel):
+    """批量建档请求。"""
+
+    items: list[InventoryPlanCreate] = Field(..., min_length=1)
+
+
+class InventoryBulkCreateResult(BaseModel):
+    """批量建档结果。"""
+
+    created: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)

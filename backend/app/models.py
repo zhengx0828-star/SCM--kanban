@@ -103,6 +103,25 @@ class Supplier(Base):
         return [rel.material for rel in self.supply_relations]
 
 
+class BaseSite(Base):
+    """L1 基地主档（我方生产基地 / 仓库）。
+
+    与供应商所在地（suppliers.city）无关：基地是「我们」收货与存放库存的地点，
+    库存信号塔的推算单元按 项目 × 物料 × 供应商 × 基地 建立，因此基地必须是
+    受控主数据而非自由文本，避免「常州 / 常州市 / 常州基地」这类同义异名。
+    """
+
+    __tablename__ = "base_sites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, index=True, comment="基地编码（唯一）")
+    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True, comment="基地名称")
+    city: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="所在城市")
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class Material(Base):
     """L1 物料主档（物料 PN 为唯一标识）。"""
 
@@ -136,6 +155,12 @@ class SupplyRelation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
     material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False, index=True)
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True)
+    # 供应商总产能（该供应商在该物料上的整体月产能，12 个月 JSON 数组）。
+    # 与 project_supply_relations.capacity（分给某项目的额度）构成两层：
+    #   本字段 = 供应商侧的总盘子；项目级字段 = 这个盘子里分给该项目的份额。
+    capacity: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="供应商总产能（1-12月 JSON 数组；物料×供应商级，全项目共用总量）"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -279,33 +304,45 @@ class Rule(Base):
 
 
 class InventoryPlan(Base):
-    """库存信号塔：动态库存与 DOH 风险监控看板 —— 推算单元（项目 × 基地 × 物料）。
+    """库存信号塔：动态库存与 DOH 风险监控看板 —— 推算单元（项目 × 物料 × 供应商 × 基地）。
 
-    一个推算单元 = 一条 SKU-基地 链：初始现有库存 + 采购提前期 + 历史需求（算 COV）+
+    一个推算单元 = 一条 SKU-供应商-基地 链：初始现有库存 + 采购提前期 + 历史需求（算 COV）+
     未来预测需求（月度值，服务端按自然日摊日均）→ 30 天日度滚动推算。
 
-    UNIQUE(project_id, base, material_id)：同一项目同一基地同一物料只有一条计划。
+    UNIQUE(project_id, material_id, supplier_id, base_id)：同一项目同一基地同一物料同一供应商
+    只有一条计划。基地为受控主数据（base_sites），供应商来自底表供应关系。
+
+    需求数据来源两种模式（由 hist_json / fcast_json 是否为空决定）：
+      - 均为空：与底表联动 —— 客户需求（project_supply_relations.demand）按 BOM 系数折算，
+                供需管理录入后库存推算自动跟随；
+      - 非空：使用本表快照（Excel 导入或早期手工录入的历史数据），不再跟随底表。
+
     手工修正（逐日 demand_override / manual_demand / manual_in / ending_override）
     落在 InventoryDay 表（按具体日期存，滚动窗口不错位）。
     口径与公式见规则页「库存管理」SOP。
     """
 
     __tablename__ = "inventory_plans"
-    __table_args__ = (UniqueConstraint("project_id", "base", "material_id", name="uq_inventory_project_base_material"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "material_id", "supplier_id", "base_id", name="uq_inventory_link"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
-    base: Mapped[str] = mapped_column(String(100), nullable=False, comment="基地名称（随 Excel 导入，不单独维护基地表）")
     material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True)
+    base_id: Mapped[int] = mapped_column(ForeignKey("base_sites.id", ondelete="CASCADE"), nullable=False, index=True)
     lead_time_days: Mapped[float] = mapped_column(Float, nullable=False, default=7, comment="采购提前期（天），参与安全库存与不可逆断货判定")
     on_hand: Mapped[float] = mapped_column(Float, nullable=False, default=0, comment="初始现有库存（推算窗口 T0 期初）")
-    hist_json: Mapped[str | None] = mapped_column(Text, nullable=True, comment="历史需求 JSON：[{m:'YYYY-MM', q:数量}, ...]（算 COV，几列算几列）")
-    fcast_json: Mapped[str | None] = mapped_column(Text, nullable=True, comment="未来预测需求 JSON：[{m:'YYYY-MM', q:月度总量}, ...]（摊日均）")
+    hist_json: Mapped[str | None] = mapped_column(Text, nullable=True, comment="历史需求 JSON：[{m:'YYYY-MM', q:数量}, ...]（算 COV；为空则改用底表客户需求）")
+    fcast_json: Mapped[str | None] = mapped_column(Text, nullable=True, comment="未来预测需求 JSON：[{m:'YYYY-MM', q:月度总量}, ...]（摊日均；为空则改用 客户需求×BOM 系数）")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     project: Mapped[Project] = relationship()
     material: Mapped["Material"] = relationship()
+    supplier: Mapped["Supplier"] = relationship()
+    base_site: Mapped["BaseSite"] = relationship()
     days: Mapped[list["InventoryDay"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan", lazy="selectin"
     )

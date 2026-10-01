@@ -14,7 +14,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .database import Base, engine
-from .routers import inventory, materials, products, projects, rules, share, suppliers, supply_relations
+from .migrations import run_migrations
+from .routers import bases, inventory, materials, products, projects, rules, share, suppliers, supply_relations
 # 暂不写入演示数据，保留空白底表
 # from .seed import seed_materials, seed_products, seed_projects, seed_suppliers
 
@@ -26,6 +27,9 @@ async def lifespan(_: FastAPI):
     # — 安全 drop（如不存在则跳过），避免历史项目残留造成模型不一致。
     with engine.begin() as conn:
         conn.execute(text("DROP TABLE IF EXISTS share_base_configs"))
+    # 结构迁移：create_all 不会改已有表，这里补齐列与约束变更（幂等）
+    for line in run_migrations(engine):
+        print(f"[migration] {line}")
     yield
 
 
@@ -55,6 +59,7 @@ app.include_router(suppliers.router)
 app.include_router(materials.router)
 app.include_router(supply_relations.router)
 app.include_router(projects.router)
+app.include_router(bases.router)
 app.include_router(rules.router)
 app.include_router(share.router)
 app.include_router(inventory.router)
@@ -81,6 +86,21 @@ _FIELD_LABELS: dict[str, str] = {
     "file_path": "Excel 文件路径",
     "from_month": "结转源月份",
     "to_month": "结转目标月份",
+    # 库存推算单元
+    "items": "批量建档项",
+    "material_id": "物料 ID",
+    "supplier_id": "供应商 ID",
+    "base_id": "基地 ID",
+    "lead_time_days": "采购提前期",
+    "on_hand": "初始现有库存",
+    "date": "日期",
+    "demand_override": "系统预测需求",
+    "manual_demand": "手工修正需求",
+    "manual_in": "手工修正入库",
+    "ending_override": "期末库存",
+    "doh_target": "目标覆盖天数",
+    "service_z": "服务水平系数 Z",
+    "excess": "过剩天数阈值",
 }
 
 # Pydantic 错误 type → 中文释义
@@ -91,12 +111,28 @@ _ERROR_TYPE_MSGS: dict[str, str] = {
     "string_too_short": "不能为空",
     "string_type": "应为字符串",
     "value_error": "字段值不合法",
-    "greater_than_equal": "数值过小（最小为 1）",
-    "less_than_equal": "数值过大",
     "json_invalid": "JSON 格式错误",
     "list_type": "应为列表",
     "dict_type": "应为对象",
+    "greater_than": "数值过小",
+    "greater_than_equal": "数值过小",
+    "less_than": "数值过大",
+    "less_than_equal": "数值过大",
+    "string_pattern_mismatch": "格式不正确",
 }
+
+
+def _bound_msg(err_type: str, ctx: dict) -> str:
+    """带上下限的中文文案（如「初始现有库存 数值过小（需 ≥ 0）」）。"""
+    if err_type in ("greater_than", "greater_than_equal"):
+        limit = ctx.get("ge", ctx.get("gt"))
+        op = "≥" if err_type == "greater_than_equal" else ">"
+        return f"数值过小（需 {op} {limit:g}）" if isinstance(limit, (int, float)) else "数值过小"
+    if err_type in ("less_than", "less_than_equal"):
+        limit = ctx.get("le", ctx.get("lt"))
+        op = "≤" if err_type == "less_than_equal" else "<"
+        return f"数值过大（需 {op} {limit:g}）" if isinstance(limit, (int, float)) else "数值过大"
+    return _ERROR_TYPE_MSGS.get(err_type, "")
 
 
 def _label_for_path(loc: list) -> str:
@@ -130,7 +166,7 @@ async def _request_validation_handler(_: Request, exc: RequestValidationError) -
         err_type = err.get("type", "")
         raw_msg = err.get("msg", "")
         path_label = _label_for_path(loc)
-        type_zh = _ERROR_TYPE_MSGS.get(err_type, "")
+        type_zh = _bound_msg(err_type, err.get("ctx", {}) or {})
         if type_zh:
             if path_label:
                 msgs.append(f"{path_label}{type_zh}")
