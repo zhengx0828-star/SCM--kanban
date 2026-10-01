@@ -42,9 +42,13 @@ export const RISK_META: Record<
 /** 地图/统计展示顺序：红 → 黄 → 绿 → 未评估 */
 export const RISK_ORDER: SupplierRiskKey[] = ["red", "yellow", "green", "none"];
 
-/** 由后端 risk_level 值归一为前端展示键（null → "none"） */
+/**
+ * 由后端 risk_level 值归一为前端展示键。
+ * null / undefined → "none"（未评估）；后端若出现未登记的取值也只回落 "none"，
+ * 避免 `RISK_META[x]` 取到 undefined 后读属性把整页渲染打崩。
+ */
 export function riskKeyOf(level: SupplierRiskLevel | null | undefined): SupplierRiskKey {
-  return level ?? "none";
+  return level && RISK_ORDER.includes(level as SupplierRiskKey) ? (level as SupplierRiskKey) : "none";
 }
 
 export const RISK_OPTIONS: { value: SupplierRiskLevel; label: string }[] = [

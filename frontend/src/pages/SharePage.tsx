@@ -29,7 +29,7 @@ import {
   useShareSummary,
 } from "@/hooks/use-share";
 import { getApiErrorMessage } from "@/lib/utils";
-import { RISK_TYPE_LABELS, RISK_TYPE_META, type ShareRiskItem } from "@/types/share";
+import { RISK_TYPE_FALLBACK, RISK_TYPE_LABELS, RISK_TYPE_META, type ShareRiskItem } from "@/types/share";
 
 /** 当前月份（YYYY-MM） */
 function currentMonth(): string {
@@ -320,7 +320,7 @@ export default function SharePage() {
                     ) : (
                       <div className="space-y-2">
                         {filteredRisks.map((r) => {
-                          const meta = RISK_TYPE_META[r.risk_type];
+                          const meta = RISK_TYPE_META[r.risk_type] ?? RISK_TYPE_FALLBACK;
                           return (
                             <div
                               key={r.record_id}

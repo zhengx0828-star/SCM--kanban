@@ -17,11 +17,20 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
-from ..models import Material, Project, ProjectSupplyRelation, Supplier, SupplyRelation
+from ..models import (
+    InventoryDay,
+    InventoryPlan,
+    Material,
+    Project,
+    ProjectSupplyRelation,
+    ShareRecord,
+    Supplier,
+    SupplyRelation,
+)
 from ..schemas import (
     MaterialRead,
     ProjectBomUpdate,
@@ -186,7 +195,17 @@ def update_project(project_id: int, payload: ProjectUpdate, db: Session = Depend
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除项目")
 def delete_project(project_id: int, db: Session = Depends(get_db)) -> None:
     project = _get_project(db, project_id)
-    db.delete(project)  # 级联删除项目明细
+    # Project 只声明了 supply_links 一条 ORM relationship，share_records / inventory_plans
+    # 都没有级联；SQLite 外键虽已开启，也依赖 ondelete 声明与表定义一致。这里显式清理，
+    # 避免留下孤儿行 —— 孤儿行的 project_id 会被 rowid 复用，让「新建项目」静默继承旧数据。
+    plan_ids = list(
+        db.execute(select(InventoryPlan.id).where(InventoryPlan.project_id == project_id)).scalars().all()
+    )
+    if plan_ids:
+        db.execute(delete(InventoryDay).where(InventoryDay.plan_id.in_(plan_ids)))
+        db.execute(delete(InventoryPlan).where(InventoryPlan.id.in_(plan_ids)))
+    db.execute(delete(ShareRecord).where(ShareRecord.project_id == project_id))
+    db.delete(project)  # 级联删除 project_supply_relations
     db.commit()
 
 

@@ -24,13 +24,16 @@ export interface RuleListResponse {
   total: number;
 }
 
-/** 常用模块预设（可手动输入新模块） */
+/** 常用模块预设（可手动输入新模块）；顺序 = 页面分组顺序，先放已有规则在用的模块 */
 export const MODULE_PRESETS = [
   "通用",
+  "Dashboard",
+  "供需管理",
+  "份额管理",
+  "库存管理",
   "项目",
   "物料",
   "供应商",
   "供应关系",
   "Excel 导入",
-  "份额管理",
 ];

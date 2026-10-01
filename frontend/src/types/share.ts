@@ -162,3 +162,15 @@ export const RISK_TYPE_META: Record<
   deviation: { label: "建议偏差", rowBg: "bg-amber-500/10", dot: "bg-amber-500", text: "text-amber-600 dark:text-amber-400", hex: "#f59e0b" },
   mismatch: { label: "份额×评分错配", rowBg: "bg-violet-500/10", dot: "bg-violet-500", text: "text-violet-600 dark:text-violet-400", hex: "#8b5cf6" },
 };
+
+/**
+ * 风险类型兜底（后端新增 risk_type 取值时用）。
+ * 直接 `RISK_TYPE_META[x]` 取到 undefined 再读属性会整页崩，故所有取值处都要 `?? 兜底`。
+ */
+export const RISK_TYPE_FALLBACK: { label: string; rowBg: string; dot: string; text: string; hex: string } = {
+  label: "未知风险",
+  rowBg: "bg-muted",
+  dot: "bg-muted-foreground",
+  text: "text-muted-foreground",
+  hex: "#9ca3af",
+};

@@ -30,6 +30,7 @@
 
 import json
 from collections import defaultdict
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -37,8 +38,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
-from ..models import Material, Project, ShareRecord, Supplier, SupplyRelation
+from ..models import Material, Project, ProjectSupplyRelation, ShareRecord, Supplier, SupplyRelation
 from ..schemas import (
+    MONTH_PATTERN,
     QDC_SCORES,
     RISK_DEVIATION_PT,
     RISK_FLUCTUATION_RATIO,
@@ -82,12 +84,38 @@ def _validate_qdc(q: Optional[float], d: Optional[float], c: Optional[float]) ->
     return errors
 
 
+def _mixed_share_scale(bases: list[dict]) -> bool:
+    """该记录的基地份额是否「小数与百分数混用」。
+
+    「全 ≤1 视为小数 ×100」是记录级启发式：同一条记录里既写 0.5 又写 50 时，
+    0.5 会被当成 0.5%（差 100 倍）且不报错。这种静默错必须拦掉。
+    """
+    vals: list[float] = []
+    for b in bases:
+        share = b.get("share")
+        if share is None:
+            continue
+        try:
+            vals.append(float(share))
+        except (TypeError, ValueError):
+            continue
+    return bool(vals) and any(v > 1 for v in vals) and any(0 < v <= 1 for v in vals)
+
+
+def _bases_scale_error(where: str) -> HTTPException:
+    """口径混用的统一错误（422 + 中文原因）。"""
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"{where}基地份额口径混用：请统一填 0-100 的百分数（50 表示 50%），不要同时出现 0.5 这类小数",
+    )
+
+
 def _auto_share_from_bases(bases: list[dict]) -> Optional[float]:
     """从 share_record.bases 自带的 lines + share 自动算份额（%）。
 
     公式：份额 = Σ(b.share × b.lines) ÷ Σ(b.lines)
-    - 基地配额约定 0-1 小数，全部 ≤1 视为小数口径 ×100；
-    - 也兼容直接录百分比（>1）的口径；
+    - 基地份额全部 ≤1 视为小数口径 ×100；也兼容直接录百分比（>1）的口径；
+    - 两种口径混用不允许（调用方需先用 `_mixed_share_scale` 拦掉，避免静默错 100 倍）；
     - 至少一个基地有份额值且总拉线 > 0 才算；
     - 返回 round 到 2 位（百分比）。
     """
@@ -361,7 +389,13 @@ def share_dashboard_stats(db: Session = Depends(get_db)) -> dict:
       —— 供份额页项目卡「波动 N / 独供 M」chip 与 Dashboard 点击自动定位使用，
       保证选中项目后 chip 数字 = KPI 卡 = 风险排行对应筛选条数。
     """
-    latest_month = db.execute(select(func.max(ShareRecord.month))).scalar_one_or_none()
+    # 默认月 = 「≤ 当前自然月的最大月份」。旧写法直接取 max(month)，只要库里有一条未来
+    # 月份（或脏月份）的记录，Dashboard 就整片落到空月份、把当月风险全部归零。
+    today = date.today()
+    cur_month = f"{today.year:04d}-{today.month:02d}"
+    latest_month = db.execute(
+        select(func.max(ShareRecord.month)).where(ShareRecord.month <= cur_month)
+    ).scalar_one_or_none()
     if latest_month is None:
         return {"month": None, "fluctuation_materials": 0, "sole_materials": 0, "by_project": []}
 
@@ -429,7 +463,7 @@ def _load_all_records(db: Session, month: str) -> list[ShareRecord]:
 @router.get("/summary", response_model=ShareSummary, summary="KPI 汇总（项目 × 月）")
 def share_summary(
     project_id: int = Query(..., description="项目 ID"),
-    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="月份（YYYY-MM）"),
+    month: str = Query(..., pattern=MONTH_PATTERN, description="月份（YYYY-MM）"),
     db: Session = Depends(get_db),
 ) -> ShareSummary:
     records = _load_records(db, project_id, month)
@@ -475,7 +509,7 @@ def share_summary(
 @router.get("/risks", response_model=list[ShareRiskItem], summary="风险排行（独供 > 波动 > 偏差 > 错配）")
 def share_risks(
     project_id: int = Query(..., description="项目 ID"),
-    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="月份（YYYY-MM）"),
+    month: str = Query(..., pattern=MONTH_PATTERN, description="月份（YYYY-MM）"),
     top: int = Query(10, ge=1, le=100, description="返回条数"),
     db: Session = Depends(get_db),
 ) -> list[ShareRiskItem]:
@@ -495,7 +529,7 @@ def share_risks(
 @router.get("/quadrant", response_model=list[ShareQuadrantPoint], summary="份额 × 评分四象限散点")
 def share_quadrant(
     project_id: int = Query(..., description="项目 ID"),
-    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="月份（YYYY-MM）"),
+    month: str = Query(..., pattern=MONTH_PATTERN, description="月份（YYYY-MM）"),
     db: Session = Depends(get_db),
 ) -> list[ShareQuadrantPoint]:
     records = _load_records(db, project_id, month)
@@ -520,7 +554,7 @@ def share_quadrant(
 @router.get("/records", response_model=ShareRecordList, summary="份额明细列表")
 def share_records(
     project_id: int = Query(..., description="项目 ID"),
-    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="月份（YYYY-MM）"),
+    month: str = Query(..., pattern=MONTH_PATTERN, description="月份（YYYY-MM）"),
     keyword: Optional[str] = Query(None, description="按物料 PN/名称/供应商名称/代码搜索"),
     db: Session = Depends(get_db),
 ) -> ShareRecordList:
@@ -551,6 +585,23 @@ def create_share_record(payload: ShareRecordCreate, db: Session = Depends(get_db
     rel = db.get(SupplyRelation, payload.supply_relation_id)
     if rel is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"供应关系 {payload.supply_relation_id} 不存在")
+
+    # 只能给「该项目已挂载的供应关系」录份额，否则会写出统计孤岛：
+    # 份额记录挂在项目下，但该项目根本没有这条供应关系，供需/库存侧永远看不到。
+    link = db.execute(
+        select(ProjectSupplyRelation).where(
+            ProjectSupplyRelation.project_id == payload.project_id,
+            ProjectSupplyRelation.supply_relation_id == payload.supply_relation_id,
+        )
+    ).scalars().first()
+    if link is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该项目未挂载该供应关系，请先在「供需管理」中挂载后再录入份额",
+        )
+
+    if payload.bases and _mixed_share_scale([b.model_dump() for b in payload.bases]):
+        raise _bases_scale_error("本条记录")
 
     existing = db.execute(
         select(ShareRecord).where(
@@ -612,6 +663,9 @@ def update_share_record(record_id: int, payload: ShareRecordUpdate, db: Session 
     manual_override = payload.share_current is not None
     bases_changed = payload.bases is not None
 
+    if payload.bases is not None and _mixed_share_scale([b.model_dump() for b in payload.bases]):
+        raise _bases_scale_error(f"份额记录 {record_id} ")
+
     if payload.share_current is not None:
         record.share_current = payload.share_current
     if payload.q_score is not None:
@@ -668,7 +722,7 @@ def delete_share_record(record_id: int, db: Session = Depends(get_db)) -> Respon
 @router.post("/import", response_model=ShareImportResult, summary="Excel 导入份额数据")
 async def import_share_records(
     project_id: int = Query(..., description="项目 ID"),
-    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="目标月份（YYYY-MM）"),
+    month: str = Query(..., pattern=MONTH_PATTERN, description="目标月份（YYYY-MM）"),
     file_path: str = Query(..., description="服务器本地 Excel 文件绝对路径"),
     db: Session = Depends(get_db),
 ) -> ShareImportResult:
@@ -820,6 +874,12 @@ async def import_share_records(
             bases_data.append({"base": bname, "share": sval, "lines": lval})
         if base_bad:
             continue
+        if bases_data and _mixed_share_scale(bases_data):
+            result.errors.append(
+                f"第 {row_num} 行: 基地份额口径混用（同一行既有 ≤1 的小数又有 >1 的百分数），"
+                "请统一填 0-100 的百分数"
+            )
+            continue
         rows.append((
             {"share_current": share, "q_score": q, "d_score": d, "c_score": c,
              "bases": bases_data if bases_data else None},
@@ -887,8 +947,8 @@ async def import_share_records(
 @router.post("/rollover", response_model=ShareSummary, summary="月末结转：本月 → 下月空档")
 def share_rollover(
     project_id: int = Query(..., description="项目 ID"),
-    from_month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="结转源月份（YYYY-MM）"),
-    to_month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="目标月份（YYYY-MM，应为下月）"),
+    from_month: str = Query(..., pattern=MONTH_PATTERN, description="结转源月份（YYYY-MM）"),
+    to_month: str = Query(..., pattern=MONTH_PATTERN, description="目标月份（YYYY-MM，应为下月）"),
     db: Session = Depends(get_db),
 ) -> ShareSummary:
     """将 from_month 的记录结转生成 to_month 空档：
@@ -896,6 +956,12 @@ def share_rollover(
     - 已有 to_month 记录则跳过（不覆盖）
     - bases 不结转（每条记录自己填写多基地快照）
     """
+    # 反向/原地结转会把源月的 share_prev 覆盖成「未来月的份额」，静默污染时间轴，直接拒绝。
+    if to_month <= from_month:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"结转目标月份 {to_month} 必须晚于来源月份 {from_month}",
+        )
     src_records = _load_records(db, project_id, from_month)
     dst_existing = {
         (r.supply_relation.material_id, r.supply_relation.supplier_id)
