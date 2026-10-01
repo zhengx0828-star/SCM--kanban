@@ -1,0 +1,802 @@
+{
+  "generated_at": "2026-10-02",
+  "window_month": "2026-10",
+  "sections": {
+    "masters": {
+      "suppliers": {
+        "TS-A01": 1,
+        "TS-A02": 2,
+        "TS-B01": 3,
+        "TS-B02": 4,
+        "TS-C01": 5,
+        "TS-C02": 6,
+        "TS-C03": 7,
+        "TS-D01": 8,
+        "TS-E01": 9
+      },
+      "materials": {
+        "RB-SC-15": 49,
+        "RB-SC-13": 48,
+        "RB-SC-12": 47,
+        "RB-SC-11": 46,
+        "RB-SC-10": 45,
+        "RB-SC-09": 44,
+        "RB-SC-08": 43,
+        "RB-SC-07": 42,
+        "RB-SC-06": 41,
+        "RB-SC-05": 40,
+        "RB-SC-04": 39,
+        "RB-SC-03": 38,
+        "RB-SC-02": 37,
+        "RB-SC-01": 36,
+        "TEST-BIG-040": 35,
+        "TEST-ZERO-030": 34,
+        "TEST-MULTI-020": 33,
+        "TEST-SOLE-010": 32,
+        "TEST-CORE-002": 31,
+        "TEST-CORE-001": 30,
+        "510302-00589": 29,
+        "510404-00238": 28,
+        "270200-00031": 27,
+        "270200-00028": 26,
+        "581601-00046": 25,
+        "570954-00092": 24,
+        "150200-00245": 23,
+        "510302-00415": 22,
+        "510404-00220": 21,
+        "270200-00019": 20,
+        "581601-00035": 19,
+        "570954-00071": 18,
+        "510302-00537": 17,
+        "150200-00138": 16,
+        "150200-00137": 15
+      },
+      "projects": {
+        "SOCK124": 3,
+        "DVSF132": 2,
+        "SSD222": 1
+      }
+    },
+    "topology": {
+      "T-CORE-P1": {
+        "rel": 1,
+        "link": 1,
+        "project": 1,
+        "pn": "TEST-CORE-001",
+        "supplier": "TS-A01"
+      },
+      "T-CORE-P2": {
+        "rel": 1,
+        "link": 2,
+        "project": 2,
+        "pn": "TEST-CORE-001",
+        "supplier": "TS-A01"
+      },
+      "T-CORE-P3": {
+        "rel": 1,
+        "link": 3,
+        "project": 3,
+        "pn": "TEST-CORE-001",
+        "supplier": "TS-A01"
+      },
+      "T-CORE-ALT": {
+        "rel": 2,
+        "link": 4,
+        "project": 1,
+        "pn": "TEST-CORE-001",
+        "supplier": "TS-A02"
+      },
+      "T-BASE-ONLY": {
+        "rel": 3,
+        "link": 5,
+        "project": 3,
+        "pn": "TEST-CORE-002",
+        "supplier": "TS-A02"
+      },
+      "T-MULTI-TS-C01": {
+        "rel": 4,
+        "link": 6,
+        "project": 1,
+        "pn": "TEST-MULTI-020",
+        "supplier": "TS-C01"
+      },
+      "T-MULTI-TS-C02": {
+        "rel": 5,
+        "link": 7,
+        "project": 1,
+        "pn": "TEST-MULTI-020",
+        "supplier": "TS-C02"
+      },
+      "T-MULTI-TS-C03": {
+        "rel": 6,
+        "link": 8,
+        "project": 1,
+        "pn": "TEST-MULTI-020",
+        "supplier": "TS-C03"
+      },
+      "T-MULTI-P3": {
+        "rel": 5,
+        "link": 9,
+        "project": 3,
+        "pn": "TEST-MULTI-020",
+        "supplier": "TS-C02"
+      },
+      "T-SOLE": {
+        "rel": 7,
+        "link": 10,
+        "project": 1,
+        "pn": "TEST-SOLE-010",
+        "supplier": "TS-B01"
+      },
+      "T-ZERO": {
+        "rel": 8,
+        "link": 11,
+        "project": 1,
+        "pn": "TEST-ZERO-030",
+        "supplier": "TS-B02"
+      },
+      "T-ZERO-BOM0": {
+        "rel": 9,
+        "link": 12,
+        "project": 1,
+        "pn": "TEST-ZERO-030",
+        "supplier": "TS-C01"
+      },
+      "T-N1-A": {
+        "rel": 10,
+        "link": 13,
+        "project": 1,
+        "pn": "270200-00019",
+        "supplier": "TS-D01"
+      },
+      "T-N1-B": {
+        "rel": 11,
+        "link": 14,
+        "project": 2,
+        "pn": "581601-00035",
+        "supplier": "TS-B02"
+      },
+      "T-BIG": {
+        "rel": 12,
+        "link": 15,
+        "project": 2,
+        "pn": "TEST-BIG-040",
+        "supplier": "TS-E01"
+      }
+    },
+    "inventory_snapshot": {
+      "file": "docs\\audit\\inventory_snapshot_import.xlsx",
+      "result": {
+        "imported": 15,
+        "updated": 0,
+        "errors": []
+      },
+      "rows": {
+        "IN-S001": {
+          "note": "无需下单，但 DOH 封顶 30 → 默认 excess=30 判【蓝·积压】（口径耦合，见报告 F-08）",
+          "on_hand": 15000.0,
+          "ref": {
+            "cov": 0.0357,
+            "safe_days": 0.1558,
+            "safe_days_derived": true,
+            "ss": 45.24,
+            "rop": 2077.5,
+            "avg_daily": 290.32,
+            "order_idx": null,
+            "stockout_idx": null,
+            "bucket": -1,
+            "on_hand": 15000.0
+          }
+        },
+        "IN-S002": {
+          "note": "需求恒 0：COV 不可算（0/0）→ NA + 兜底安全天数；demand_blank=True 走中性「无消耗」提示（F-09）",
+          "on_hand": 1000.0,
+          "ref": {
+            "cov": null,
+            "safe_days": 5.0,
+            "safe_days_derived": false,
+            "ss": 0.0,
+            "rop": 0.0,
+            "avg_daily": 0.0,
+            "order_idx": null,
+            "stockout_idx": null,
+            "bucket": -1,
+            "on_hand": 1000.0
+          }
+        },
+        "IN-S003": {
+          "note": "不可逆断货：DOH 6.8 < LT 30 → 今日下单也来不及（分桶 0 + 卡① hint）",
+          "on_hand": 300.0,
+          "ref": {
+            "cov": 0.0357,
+            "safe_days": 0.3226,
+            "safe_days_derived": true,
+            "ss": 12.49,
+            "rop": 1173.78,
+            "avg_daily": 38.71,
+            "order_idx": 0,
+            "stockout_idx": 7,
+            "bucket": 0,
+            "on_hand": 300.0
+          }
+        },
+        "IN-S004": {
+          "note": "分桶 0 今日需下单（产能回填 ok）",
+          "on_hand": 725.81,
+          "ref": {
+            "cov": 0.0,
+            "safe_days": 0.0,
+            "safe_days_derived": true,
+            "ss": 0.0,
+            "rop": 677.42,
+            "avg_daily": 96.77,
+            "order_idx": 0,
+            "stockout_idx": 7,
+            "bucket": 0,
+            "on_hand": 725.81
+          }
+        },
+        "IN-S005": {
+          "note": "分桶 1（D2–D7，产能回填 tight）",
+          "on_hand": 1500.0,
+          "ref": {
+            "cov": 0.0,
+            "safe_days": 0.0,
+            "safe_days_derived": true,
+            "ss": 0.0,
+            "rop": 1161.29,
+            "avg_daily": 96.77,
+            "order_idx": 3,
+            "stockout_idx": 15,
+            "bucket": 1,
+            "on_hand": 1500.0
+          }
+        },
+        "IN-S006": {
+          "note": "分桶 2（D8–D14，产能回填 short）",
+          "on_hand": 2467.74,
+          "ref": {
+            "cov": 0.0,
+            "safe_days": 0.0,
+            "safe_days_derived": true,
+            "ss": 0.0,
+            "rop": 1451.61,
+            "avg_daily": 96.77,
+            "order_idx": 10,
+            "stockout_idx": 25,
+            "bucket": 2,
+            "on_hand": 2467.74
+          }
+        },
+        "IN-S007": {
+          "note": "分桶 3（D15–D30）+ COV 高波动（safe_days 被 COV 拉大）",
+          "on_hand": 1507.08,
+          "ref": {
+            "cov": 0.8429,
+            "safe_days": 6.2194,
+            "safe_days_derived": true,
+            "ss": 200.63,
+            "rop": 845.79,
+            "avg_daily": 32.26,
+            "order_idx": 20,
+            "stockout_idx": null,
+            "bucket": 3,
+            "on_hand": 1507.08
+          }
+        },
+        "IN-S008": {
+          "note": "超长 LT 60 天 → 不可逆断货",
+          "on_hand": 500.0,
+          "ref": {
+            "cov": 0.0323,
+            "safe_days": 0.4123,
+            "safe_days_derived": true,
+            "ss": 47.88,
+            "rop": 7015.62,
+            "avg_daily": 116.13,
+            "order_idx": 0,
+            "stockout_idx": 4,
+            "bucket": 0,
+            "on_hand": 500.0
+          }
+        },
+        "IN-S009": {
+          "note": "COV 不可算（hist 仅 1 月）→ 安全天数兜底 5、safe_days_derived=false、行内标「兜底」",
+          "on_hand": 1645.16,
+          "ref": {
+            "cov": null,
+            "safe_days": 5.0,
+            "safe_days_derived": false,
+            "ss": 322.58,
+            "rop": 1290.32,
+            "avg_daily": 64.52,
+            "order_idx": 5,
+            "stockout_idx": 25,
+            "bucket": 1,
+            "on_hand": 1645.16
+          }
+        },
+        "IN-S010": {
+          "note": "过剩 + 极值：on_hand=1e9 → 单元格极值渲染压力测试",
+          "on_hand": 1000000000.0,
+          "ref": {
+            "cov": 0.0,
+            "safe_days": 0.0,
+            "safe_days_derived": true,
+            "ss": 0.0,
+            "rop": 1129.03,
+            "avg_daily": 161.29,
+            "order_idx": null,
+            "stockout_idx": null,
+            "bucket": -1,
+            "on_hand": 1000000000.0
+          }
+        },
+        "IN-S011": {
+          "note": "级联：核心件断供传导到 EP1",
+          "on_hand": 1365.58,
+          "ref": {
+            "cov": 0.0357,
+            "safe_days": 0.1558,
+            "safe_days_derived": true,
+            "ss": 15.58,
+            "rop": 715.58,
+            "avg_daily": 100.0,
+            "order_idx": 6,
+            "stockout_idx": 13,
+            "bucket": 1,
+            "on_hand": 1365.58
+          }
+        },
+        "IN-S012": {
+          "note": "级联：核心件断供传导到 PW1",
+          "on_hand": 1902.18,
+          "ref": {
+            "cov": 0.0357,
+            "safe_days": 0.1558,
+            "safe_days_derived": true,
+            "ss": 15.08,
+            "rop": 692.5,
+            "avg_daily": 96.77,
+            "order_idx": 12,
+            "stockout_idx": 19,
+            "bucket": 2,
+            "on_hand": 1902.18
+          }
+        },
+        "IN-S013": {
+          "note": "COV 中波动档 mid（COV=0.471 ∈ [0.35,0.8)）+ 晚窗口下单",
+          "on_hand": 782.7,
+          "ref": {
+            "cov": 0.4714,
+            "safe_days": 2.4597,
+            "safe_days_derived": true,
+            "ss": 71.41,
+            "rop": 361.73,
+            "avg_daily": 29.03,
+            "order_idx": 14,
+            "stockout_idx": 26,
+            "bucket": 3,
+            "on_hand": 782.7
+          }
+        },
+        "IN-S014": {
+          "note": "份额/库存交叉：同供应商多项目多基地",
+          "on_hand": 725.81,
+          "ref": {
+            "cov": 0.0,
+            "safe_days": 0.0,
+            "safe_days_derived": true,
+            "ss": 0.0,
+            "rop": 677.42,
+            "avg_daily": 96.77,
+            "order_idx": 0,
+            "stockout_idx": 7,
+            "bucket": 0,
+            "on_hand": 725.81
+          }
+        },
+        "IN-S015": {
+          "note": "浅红（期末 < SS）+ 不可逆 + 今日下单（红/库存双重触发）",
+          "on_hand": 132.26,
+          "ref": {
+            "cov": 1.1314,
+            "safe_days": 5.9032,
+            "safe_days_derived": true,
+            "ss": 190.43,
+            "rop": 513.01,
+            "avg_daily": 32.26,
+            "order_idx": 0,
+            "stockout_idx": 4,
+            "bucket": 0,
+            "on_hand": 132.26
+          }
+        }
+      }
+    },
+    "inventory_master": {
+      "result": {
+        "created": 6,
+        "skipped": 0,
+        "errors": []
+      },
+      "rows": {
+        "IN-M001": {
+          "note": "master 联动：客户需求 × BOM 1.0",
+          "on_hand": 400.0
+        },
+        "IN-M002": {
+          "note": "master 零需求（demand 全 0）",
+          "on_hand": 500.0
+        },
+        "IN-M003": {
+          "note": "缺客户需求（PSR.demand=NULL）→ 琥珀徽章",
+          "on_hand": 500.0
+        },
+        "IN-M004": {
+          "note": "bom_factor=NULL → 默认 1.0",
+          "on_hand": 300.0
+        },
+        "IN-M005": {
+          "note": "bom_factor=0 → 需求恒 0",
+          "on_hand": 300.0
+        },
+        "IN-M006": {
+          "note": "BOM=2.5 放大",
+          "on_hand": 300.0
+        }
+      }
+    },
+    "capacity": [
+      {
+        "key": "IN-S004",
+        "want": "ok",
+        "limit": 1354.84,
+        "rop": 677.42,
+        "note": "分桶 0 今日需下单（产能回填 ok）"
+      },
+      {
+        "key": "IN-S005",
+        "want": "tight",
+        "limit": 1366.22,
+        "rop": 1161.29,
+        "note": "分桶 1（D2–D7，产能回填 tight）"
+      },
+      {
+        "key": "IN-S006",
+        "want": "short",
+        "limit": 1209.67,
+        "rop": 1451.61,
+        "note": "分桶 2（D8–D14，产能回填 short）"
+      },
+      {
+        "key": "IN-S011",
+        "want": "zero",
+        "limit": 0.0,
+        "rop": 715.58,
+        "note": "级联：核心件断供传导到 EP1"
+      }
+    ],
+    "share": [
+      {
+        "id": "RB01",
+        "pn": "RB-SC-01",
+        "expect": "独供风险（同时满足波动 → 优先级取独供）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB02",
+        "pn": "RB-SC-02",
+        "expect": "两条均「份额波动」（49≤70×0.7 含等号触发；51≥30×1.3 触发）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB03",
+        "pn": "RB-SC-03",
+        "expect": "两条均「建议偏差」|56−50|=6>5、|44−50|=6>5",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB04",
+        "pn": "RB-SC-04",
+        "expect": "无风险（偏差恰 5pp、weighted 恰 0.5 均不触发）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB05",
+        "pn": "RB-SC-05",
+        "expect": "TS-C01 一条「错配」；TS-C02 无风险",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB06",
+        "pn": "RB-SC-06",
+        "expect": "无风险（share=50 但 weighted=0.5 不满足 <0.5）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB07",
+        "pn": "RB-SC-07",
+        "expect": "TS-C01「份额波动」（上期 0 → 本期 >0）；优先级高于 40pp 偏差",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB08",
+        "pn": "RB-SC-08",
+        "expect": "weight_scheme=quality，weighted 0.64/0.36，建议配额 64/36",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB09",
+        "pn": "RB-SC-09",
+        "expect": "weighted/quota 均 None（不写入 0）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB10",
+        "pn": "RB-SC-10",
+        "expect": "自动份额 40 / 10（share 空但有 lines 的基地仍进分母 → 摊薄，见 F-14）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB11",
+        "pn": "RB-SC-11",
+        "expect": "自动份额 60 / 40（小数口径正确识别）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB12",
+        "pn": "RB-SC-12",
+        "expect": "混合口径被 422 拦截（审计 F-18 已修）；统一百分数后自动份额 50 / 50",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB13",
+        "pn": "RB-SC-13",
+        "expect": "三家等权 → 建议配额 33/33/33 = 99%（无余额补偿，SOP 声明可接受）",
+        "month": "2026-09"
+      },
+      {
+        "id": "RB15",
+        "pn": "RB-SC-15",
+        "expect": "P1 判独供 / P2 不判独供（独供按项目内判定）",
+        "month": "2026-09"
+      }
+    ],
+    "rollover_and_negative": [
+      {
+        "case": "跨年结转 2026-12 → 2027-01",
+        "status": 200,
+        "expect": "生成 2027-01 空档且 share_prev/quota_prev 带入",
+        "detail": "{'project_id': 3, 'project_name': 'PW1', 'month': '2027-01', 'total_materials': 1, 'total_relations': 1, 'sole_materials"
+      },
+      {
+        "case": "反向结转 to_month 早于 from_month",
+        "status": 422,
+        "expect": "应 422（拒绝倒流）",
+        "actual": "被拒"
+      },
+      {
+        "case": "份额月份 2026-13",
+        "status": 422,
+        "expect": "422",
+        "actual": "被拒"
+      },
+      {
+        "case": "份额月份 2026-00",
+        "status": 422,
+        "expect": "422",
+        "actual": "被拒"
+      },
+      {
+        "case": "share_current=150",
+        "status": 422,
+        "expect": "422"
+      },
+      {
+        "case": "QDC 非五档 q_score=0.4",
+        "status": 422,
+        "expect": "422"
+      },
+      {
+        "case": "往「未挂载该供应关系」的项目写份额",
+        "status": 409,
+        "expect": "422/409（项目未挂载该关系）",
+        "actual": "被拒"
+      },
+      {
+        "case": "demand 数组长度 11",
+        "status": 422,
+        "expect": "422"
+      },
+      {
+        "case": "bom_factor=-1",
+        "status": 422,
+        "expect": "422"
+      },
+      {
+        "case": "重复建档同一四元组",
+        "status": 409,
+        "expect": "409"
+      },
+      {
+        "case": "PATCH on_hand=-100",
+        "status": 422,
+        "expect": "422（负库存无意义）",
+        "actual": "被拒"
+      },
+      {
+        "case": "PATCH lead_time_days=0",
+        "status": 422,
+        "expect": "422"
+      },
+      {
+        "case": "批量建档 items 内自重复",
+        "status": 200,
+        "expect": "一条 created 一条 skipped（文档承诺单条失败不影响其余）",
+        "actual": "created=1 skipped=1"
+      },
+      {
+        "case": "库存筛选不存在的项目",
+        "status": 200,
+        "detail": "rows=0"
+      },
+      {
+        "case": "份额 summary 不存在项目",
+        "status": 200,
+        "detail": "{'project_id': 99999, 'project_name': '', 'month': '2026-09', 'total_materials': 0, 'total_relations': 0, 'sole_materials': 0, 'fluctuation_"
+      },
+      {
+        "case": "份额月份非法 2026-13",
+        "status": 422,
+        "expect": "422",
+        "actual": "{'detail': '月份格式不正确'}"
+      },
+      {
+        "case": "份额月份非法 2026-00",
+        "status": 422,
+        "expect": "422",
+        "actual": "{'detail': '月份格式不正确'}"
+      },
+      {
+        "case": "份额月份非法 2026-9",
+        "status": 422,
+        "expect": "422",
+        "actual": "{'detail': '月份格式不正确'}"
+      },
+      {
+        "case": "给「项目未挂载」的供应关系录份额",
+        "status": 409,
+        "expect": "409",
+        "actual": "{'detail': '该项目未挂载该供应关系，请先在「供需管理」中挂载后再录入份额'}"
+      },
+      {
+        "case": "反向月度结转 2026-09 → 2026-08",
+        "status": 422,
+        "expect": "422",
+        "actual": "{'detail': '结转目标月份 2026-08 必须晚于来源月份 2026-09'}"
+      },
+      {
+        "case": "dashboard-stats",
+        "status": 200,
+        "detail": "{\"month\": \"2026-09\", \"fluctuation_materials\": 3, \"sole_materials\": 2, \"by_project\": [{\"project_id\": 1, \"code\": \"SSD222\", \"name\": \"LFP3\", \"fluctuation_materials\": 3, \"sole_materials\": 2}, {\"project_id\": 2, \"code\": \"DVSF132\", \"name\": \"EP1\", \"fluctuation_material"
+      },
+      {
+        "case": "excess=60（>窗口 30）时的口径变化",
+        "status": 200,
+        "detail": "封顶行 7 · 首格蓝灯 0（对照 excess=30 时应为 7）"
+      },
+      {
+        "case": "RB12 基地份额小数/百分数混用",
+        "status": 422,
+        "expect": "422（口径必须统一，不再静默错 100 倍）",
+        "actual": "本条记录基地份额口径混用：请统一填 0-100 的百分数（50 表示 50%），不要同时出现 0.5 这类小数"
+      }
+    ],
+    "finalize": {
+      "deleted_share_rows": 2,
+      "restored_on_hand": 0
+    },
+    "verify": {
+      "snapshot_rows": 15,
+      "mismatch": 0
+    },
+    "manual_days": [
+      {
+        "key": "SSD222/TEST-CORE-001/TS-A01/宁波",
+        "date": "2026-10-04",
+        "field": "demand_override",
+        "value": 99999.0,
+        "http": 200,
+        "note": "应急：把系统预测需求改大 → 提前断货",
+        "before": {
+          "ending": 303.23,
+          "status": "ok"
+        },
+        "after": {
+          "ending": -99663.52,
+          "status": "stockout",
+          "manual": true
+        },
+        "order_by_date": "2026-10-02",
+        "stockout_date": "2026-10-04"
+      },
+      {
+        "key": "SSD222/TEST-CORE-001/TS-A01/常州",
+        "date": "2026-10-03",
+        "field": "manual_in",
+        "value": 5000.0,
+        "http": 200,
+        "note": "在途到货 → 期末库存抬升",
+        "before": {
+          "ending": 14419.35,
+          "status": "blue"
+        },
+        "after": {
+          "ending": 19419.35,
+          "status": "blue",
+          "manual": true
+        },
+        "order_by_date": null,
+        "stockout_date": null
+      },
+      {
+        "key": "DVSF132/581601-00035/TS-B02/青岛",
+        "date": "2026-10-06",
+        "field": "ending_override",
+        "value": 0.0,
+        "http": 200,
+        "note": "盘点实盘为 0 → 强制已断货",
+        "before": {
+          "ending": -29.03,
+          "status": "stockout"
+        },
+        "after": {
+          "ending": 0.0,
+          "status": "stockout",
+          "manual": true
+        },
+        "order_by_date": "2026-10-02",
+        "stockout_date": "2026-10-06"
+      },
+      {
+        "key": "SSD222/270200-00019/TS-D01/青岛",
+        "date": "2026-10-05",
+        "field": "manual_demand",
+        "value": -3000.0,
+        "http": 200,
+        "note": "需求临时下调（负修正）→ 库存被动抬高",
+        "before": {
+          "ending": 35.48,
+          "status": "red"
+        },
+        "after": {
+          "ending": 3035.48,
+          "status": "blue",
+          "manual": true
+        },
+        "order_by_date": "2026-10-02",
+        "stockout_date": null
+      },
+      {
+        "key": "SOCK124/TEST-CORE-002/TS-A02/青岛",
+        "date": "2026-10-03",
+        "field": "doh_target",
+        "value": 10.0,
+        "http": 200,
+        "note": "按目标 DOH 反推期末库存（doh_target 分支）",
+        "before": {
+          "ending": 219.35,
+          "status": "ok"
+        },
+        "after": {
+          "ending": 403.23,
+          "status": "ok",
+          "manual": true
+        },
+        "order_by_date": "2026-10-02",
+        "stockout_date": "2026-10-13"
+      }
+    ]
+  }
+}

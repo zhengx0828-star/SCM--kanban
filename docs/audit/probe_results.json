@@ -1,0 +1,219 @@
+[
+  {
+    "case": "P1 批量建档 items 内自重复",
+    "status": 200,
+    "expect": "created=1 / skipped=1（端点 docstring 承诺「单条失败不影响其余」）",
+    "actual": "status=200 body={\"created\": 1, \"skipped\": 1, \"errors\": [\"第 2 项：与本次提交的第 1 项重复（同一项目×物料×供应商×基地）\"]}",
+    "severity": ""
+  },
+  {
+    "case": "P2 JSON 整数 123",
+    "status": 200,
+    "expect": "200 且静默忽略脏数据",
+    "actual": "status=200 → 降级为空（hist=9 条）",
+    "severity": ""
+  },
+  {
+    "case": "P2 JSON 浮点 1.5",
+    "status": 200,
+    "expect": "200 且静默忽略脏数据",
+    "actual": "status=200 → 降级为空（hist=9 条）",
+    "severity": ""
+  },
+  {
+    "case": "P2 JSON 布尔 true",
+    "status": 200,
+    "expect": "200 且静默忽略脏数据",
+    "actual": "status=200 → 降级为空（hist=9 条）",
+    "severity": ""
+  },
+  {
+    "case": "P2 JSON 对象 {..}",
+    "status": 200,
+    "expect": "200 且静默忽略脏数据",
+    "actual": "status=200 → 降级为空（hist=9 条）",
+    "severity": ""
+  },
+  {
+    "case": "P2 JSON 字符串 \"abc\"",
+    "status": 200,
+    "expect": "200 且静默忽略脏数据",
+    "actual": "status=200 → 降级为空（hist=9 条）",
+    "severity": ""
+  },
+  {
+    "case": "P2 非 JSON 文本 abc",
+    "status": 200,
+    "expect": "200 且静默忽略脏数据",
+    "actual": "status=200 → 降级为空（hist=9 条）",
+    "severity": ""
+  },
+  {
+    "case": "P3 历史月份未补零（'2026-7'）",
+    "status": 200,
+    "expect": "归一化为 2026-07 或忽略",
+    "actual": "status=200 原样返回=['2026-07', '2026-08', '2026-09'] cov=0.0357",
+    "severity": ""
+  },
+  {
+    "case": "P3 快照预测含次年月份（2027-01）",
+    "status": 200,
+    "expect": "次年月份原样保留（窗口走到 1 月时可精确命中）",
+    "actual": "status=200 fcast=['2026-10', '2027-01']",
+    "severity": ""
+  },
+  {
+    "case": "P4 删除项目后下游数据残留",
+    "status": 204,
+    "expect": "全为 0 条（应随项目级联清理）",
+    "actual": "残留 share_records=0、project_supply_relations=0、inventory_plans=0",
+    "severity": ""
+  },
+  {
+    "case": "P5 删除仍被库存档案引用的供应商",
+    "status": 609,
+    "expect": "409 拦截，或库存页仍可用",
+    "actual": "DELETE=409；随后 GET /inventory/plans = 200（正常）",
+    "severity": ""
+  },
+  {
+    "case": "P6 PATCH on_hand=-100",
+    "status": 422,
+    "expect": "422",
+    "actual": "status=422 on_hand=None lt=None",
+    "severity": ""
+  },
+  {
+    "case": "P6 PATCH on_hand=-1e9",
+    "status": 422,
+    "expect": "422",
+    "actual": "status=422 on_hand=None lt=None",
+    "severity": ""
+  },
+  {
+    "case": "P6 PATCH lead_time_days=0",
+    "status": 422,
+    "expect": "422",
+    "actual": "status=422 on_hand=None lt=None",
+    "severity": ""
+  },
+  {
+    "case": "P6 PATCH lead_time_days=-5",
+    "status": 422,
+    "expect": "422",
+    "actual": "status=422 on_hand=None lt=None",
+    "severity": ""
+  },
+  {
+    "case": "P6 手工修正需求 = -1e12（极端负值）",
+    "status": 422,
+    "expect": "422（日格数值需有上下限）",
+    "actual": "status=422",
+    "severity": ""
+  },
+  {
+    "case": "P7 产能额度显式录入 0",
+    "status": 200,
+    "expect": "判 short（额度为 0 → 任何补货都超额度）",
+    "actual": "capacity_limit=0.0 capacity_status=short",
+    "severity": ""
+  },
+  {
+    "case": "P8 后端枚举取值集合",
+    "status": 200,
+    "expect": "与前端 INV_STATUS_META / INV_COV_META / INV_CAPACITY_META 键完全一致",
+    "actual": "status=['blue', 'ok', 'red', 'stockout', 'yellow']\ncov_label=['high', 'low', 'mid', 'na']\ncapacity_status=['na', 'ok', 'short', 'tight']",
+    "severity": ""
+  },
+  {
+    "case": "P8 前端枚举取值兜底（静态扫描）",
+    "status": 200,
+    "expect": "INV_*_META / RISK_TYPE_META 的每处取值都带 `?? 兜底`",
+    "actual": "未兜底 0 处（全部已兜底）",
+    "severity": ""
+  },
+  {
+    "case": "P8 缺需求数据（hist/fcast 全空）行",
+    "status": 200,
+    "expect": "前端展示琥珀徽章 + 「无法推算补货建议」",
+    "actual": "['TEST-SOLE-010']",
+    "severity": ""
+  },
+  {
+    "case": "P9 跨年窗口需求取数（基准 2026-12-15）",
+    "status": 200,
+    "expect": "2026-12 取到当年 12 月值、2027-01 取到同月画像值，都不得为 0",
+    "actual": "hist=11 条（只取今天之前的月份）/ 2026-12=100.0 / 2027-01=100.0",
+    "severity": ""
+  },
+  {
+    "case": "P10 份额月份非法 2026-13",
+    "status": 422,
+    "expect": "422（month 必须 01-12 两位）",
+    "actual": "status=422 {\"detail\": \"月份格式不正确\"}",
+    "severity": ""
+  },
+  {
+    "case": "P10 份额月份非法 2026-00",
+    "status": 422,
+    "expect": "422（month 必须 01-12 两位）",
+    "actual": "status=422 {\"detail\": \"月份格式不正确\"}",
+    "severity": ""
+  },
+  {
+    "case": "P10 份额月份非法 2026-9",
+    "status": 422,
+    "expect": "422（month 必须 01-12 两位）",
+    "actual": "status=422 {\"detail\": \"月份格式不正确\"}",
+    "severity": ""
+  },
+  {
+    "case": "P10 存在未来月份时 dashboard 默认月",
+    "status": 200,
+    "expect": "仍是「≤ 当前自然月」的最大月份",
+    "actual": "未来月写入=201；dashboard.month=2026-09",
+    "severity": ""
+  },
+  {
+    "case": "P11 给「项目未挂载」的供应关系录份额",
+    "status": 409,
+    "expect": "409 拦截（先在供需管理挂载）",
+    "actual": "status=409 {\"detail\": \"该项目未挂载该供应关系，请先在「供需管理」中挂载后再录入份额\"}",
+    "severity": ""
+  },
+  {
+    "case": "P12 反向月度结转（2026-09 → 2026-08）",
+    "status": 422,
+    "expect": "422 拒绝（目标月必须晚于来源月）",
+    "actual": "status=422 {\"detail\": \"结转目标月份 2026-08 必须晚于来源月份 2026-09\"}",
+    "severity": ""
+  },
+  {
+    "case": "P13 基地份额小数/百分数混用",
+    "status": 422,
+    "expect": "422（同一条记录口径必须统一）",
+    "actual": "status=422 {\"detail\": \"本条记录基地份额口径混用：请统一填 0-100 的百分数（50 表示 50%），不要同时出现 0.5 这类小数\"}",
+    "severity": ""
+  },
+  {
+    "case": "P13 统一百分数口径（50 / 50）",
+    "status": 201,
+    "expect": "201 且自动份额 = 50%",
+    "actual": "status=201 share_current=50.0",
+    "severity": ""
+  },
+  {
+    "case": "P14 BOM=0（需求被乘成 0）",
+    "status": 200,
+    "expect": "bom_zero=True 且 demand_blank=True",
+    "actual": "bom_zero=True demand_blank=True avg_daily=0.0 end_day1=500.0",
+    "severity": ""
+  },
+  {
+    "case": "P14 客户需求 12 个月全 0（BOM=1）",
+    "status": 200,
+    "expect": "demand_blank=True 且 bom_zero=False",
+    "actual": "bom_zero=False demand_blank=True avg_daily=0.0",
+    "severity": ""
+  }
+]
