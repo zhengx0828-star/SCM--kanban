@@ -7,11 +7,11 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
-from ..models import Supplier, SupplyRelation
+from ..models import InventoryPlan, Supplier, SupplyRelation
 from ..schemas import SupplierCreate, SupplierRead, SupplierUpdate
 
 router = APIRouter(prefix="/api/suppliers", tags=["Suppliers"])
@@ -64,5 +64,23 @@ def delete_supplier(supplier_id: int, db: Session = Depends(get_db)) -> None:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"供应商 {supplier_id} 不存在")
-    db.delete(supplier)  # 级联删除供应关系与项目明细
+    # 被引用时不允许删除：否则会连带删掉供应关系与库存档案，且库存页输出层会因
+    # supplier 为 None 而 500。基地主数据已有同样的 409 保护，这里补齐。
+    plans = db.execute(
+        select(func.count()).select_from(InventoryPlan).where(InventoryPlan.supplier_id == supplier_id)
+    ).scalar_one()
+    if plans:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"供应商「{supplier.name}」仍被 {plans} 条库存档案引用，请先删除这些库存档案",
+        )
+    rels = db.execute(
+        select(func.count()).select_from(SupplyRelation).where(SupplyRelation.supplier_id == supplier_id)
+    ).scalar_one()
+    if rels:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"供应商「{supplier.name}」仍有 {rels} 条供应关系，请先解除供应关系",
+        )
+    db.delete(supplier)
     db.commit()
