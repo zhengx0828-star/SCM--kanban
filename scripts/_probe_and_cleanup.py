@@ -375,15 +375,33 @@ def p8_enum_and_null_render():
       ① 列出后端当前实际取值集合；
       ② 静态扫描前端源码，确认所有取值处都有 `?? 兜底`（回归门禁）。
     """
-    st, plans = req("GET", "/api/inventory/plans")
+    # ⚠️ `/api/inventory/plans` 的 `project_ids` 是必带项：不带参数会返回 200 + **空数组**，
+    #    枚举集合会变成 [] —— 看起来「通过」，其实是「没有取证」。必须先取项目 id 再查。
+    #    （2026-10-05 修正：这个腿此前一直是空的，等于没在扫。）
+    proj_ids = [p["id"] for p in items("/api/projects")]
+    qs = "&".join(f"project_ids={i}" for i in proj_ids)
+    st, plans = req("GET", f"/api/inventory/plans?{qs}") if proj_ids else (200, [])
     statuses = sorted({c["status"] for p in plans for c in p["days"]}) if isinstance(plans, list) else []
     covs = sorted({p["cov_label"] for p in plans}) if isinstance(plans, list) else []
     caps = sorted({p["capacity_status"] for p in plans}) if isinstance(plans, list) else []
     rec("P8 后端枚举取值集合", 200, "与前端 INV_STATUS_META / INV_COV_META / INV_CAPACITY_META 键完全一致",
-        f"status={statuses}\ncov_label={covs}\ncapacity_status={caps}")
+        f"项目数={len(proj_ids)} 推算单元={len(plans) if isinstance(plans, list) else 'n/a'}\n"
+        f"status={statuses}\ncov_label={covs}\ncapacity_status={caps}",
+        "" if statuses else "取证为空：枚举集合没取到，门禁形同虚设（检查 project_ids 是否传到）")
 
     # ---- 静态回归：后端派生枚举的取值处必须带 ?? 兜底 ----
-    guarded = ("INV_STATUS_META", "INV_COV_META", "INV_CAPACITY_META", "RISK_TYPE_META")
+    # 变更管理（2026-10-05 接入）：CHANGE_STATUS_META / TASK_STATE_META / ALERT_LEVEL_META
+    # 同样是「后端派生、前端只渲染」的枚举（单状态 / 任务五色 / 预警级别），
+    # 一旦出现未登记取值 → undefined.chipCls / undefined.dot → 整页白屏，故纳入同一门禁。
+    guarded = (
+        "INV_STATUS_META",
+        "INV_COV_META",
+        "INV_CAPACITY_META",
+        "RISK_TYPE_META",
+        "CHANGE_STATUS_META",
+        "TASK_STATE_META",
+        "ALERT_LEVEL_META",
+    )
     unguarded: list[str] = []
     src = ROOT / "frontend" / "src"
     for f in sorted(src.rglob("*.ts*")):
@@ -396,7 +414,7 @@ def p8_enum_and_null_render():
                 # 取值后必须紧跟 `??`（本行内）；`Const.N[` 这类别的常量数组不在此列
                 if "??" not in rest and "??" not in line:
                     unguarded.append(f"{f.relative_to(ROOT).as_posix()}:{i}  {line.strip()[:100]}")
-    rec("P8 前端枚举取值兜底（静态扫描）", 200, "INV_*_META / RISK_TYPE_META 的每处取值都带 `?? 兜底`",
+    rec("P8 前端枚举取值兜底（静态扫描）", 200, "INV_*_META / RISK_TYPE_META / CHANGE_STATUS_META / TASK_STATE_META / ALERT_LEVEL_META 的每处取值都带 `?? 兜底`",
         f"未兜底 {len(unguarded)} 处" + ("\n" + "\n".join(unguarded[:8]) if unguarded else "（全部已兜底）"),
         "" if not unguarded else "F-14 高：后端新增枚举取值 → undefined 下标 → 整页渲染崩溃")
 

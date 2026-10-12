@@ -10,57 +10,57 @@
     "case": "P2 JSON 整数 123",
     "status": 200,
     "expect": "200 且静默忽略脏数据",
-    "actual": "status=200 → 降级为空（hist=9 条）",
+    "actual": "status=200 → 降级为空（hist=? 条）",
     "severity": ""
   },
   {
     "case": "P2 JSON 浮点 1.5",
     "status": 200,
     "expect": "200 且静默忽略脏数据",
-    "actual": "status=200 → 降级为空（hist=9 条）",
+    "actual": "status=200 → 降级为空（hist=? 条）",
     "severity": ""
   },
   {
     "case": "P2 JSON 布尔 true",
     "status": 200,
     "expect": "200 且静默忽略脏数据",
-    "actual": "status=200 → 降级为空（hist=9 条）",
+    "actual": "status=200 → 降级为空（hist=? 条）",
     "severity": ""
   },
   {
     "case": "P2 JSON 对象 {..}",
     "status": 200,
     "expect": "200 且静默忽略脏数据",
-    "actual": "status=200 → 降级为空（hist=9 条）",
+    "actual": "status=200 → 降级为空（hist=? 条）",
     "severity": ""
   },
   {
     "case": "P2 JSON 字符串 \"abc\"",
     "status": 200,
     "expect": "200 且静默忽略脏数据",
-    "actual": "status=200 → 降级为空（hist=9 条）",
+    "actual": "status=200 → 降级为空（hist=? 条）",
     "severity": ""
   },
   {
     "case": "P2 非 JSON 文本 abc",
     "status": 200,
     "expect": "200 且静默忽略脏数据",
-    "actual": "status=200 → 降级为空（hist=9 条）",
+    "actual": "status=200 → 降级为空（hist=? 条）",
     "severity": ""
   },
   {
     "case": "P3 历史月份未补零（'2026-7'）",
     "status": 200,
     "expect": "归一化为 2026-07 或忽略",
-    "actual": "status=200 原样返回=['2026-07', '2026-08', '2026-09'] cov=0.0357",
-    "severity": ""
+    "actual": "status=200 原样返回=None cov=None",
+    "severity": "F-02 中：不做月份归一化；若与 _month_key 产物比较则永远匹配不上（跨年/缺月需求静默归 0）"
   },
   {
     "case": "P3 快照预测含次年月份（2027-01）",
     "status": 200,
     "expect": "次年月份原样保留（窗口走到 1 月时可精确命中）",
-    "actual": "status=200 fcast=['2026-10', '2027-01']",
-    "severity": ""
+    "actual": "status=200 fcast=None",
+    "severity": "跨年月份键丢失"
   },
   {
     "case": "P4 删除项目后下游数据残留",
@@ -115,20 +115,20 @@
     "case": "P7 产能额度显式录入 0",
     "status": 200,
     "expect": "判 short（额度为 0 → 任何补货都超额度）",
-    "actual": "capacity_limit=0.0 capacity_status=short",
+    "actual": "capacity_limit=None capacity_status=None",
     "severity": ""
   },
   {
     "case": "P8 后端枚举取值集合",
     "status": 200,
     "expect": "与前端 INV_STATUS_META / INV_COV_META / INV_CAPACITY_META 键完全一致",
-    "actual": "status=['blue', 'ok', 'red', 'stockout', 'yellow']\ncov_label=['high', 'low', 'mid', 'na']\ncapacity_status=['na', 'ok', 'short', 'tight']",
+    "actual": "项目数=3 推算单元=6\nstatus=['blue', 'ok', 'red', 'stockout']\ncov_label=['low']\ncapacity_status=['na', 'ok']",
     "severity": ""
   },
   {
     "case": "P8 前端枚举取值兜底（静态扫描）",
     "status": 200,
-    "expect": "INV_*_META / RISK_TYPE_META 的每处取值都带 `?? 兜底`",
+    "expect": "INV_*_META / RISK_TYPE_META / CHANGE_STATUS_META / TASK_STATE_META / ALERT_LEVEL_META 的每处取值都带 `?? 兜底`",
     "actual": "未兜底 0 处（全部已兜底）",
     "severity": ""
   },
@@ -136,8 +136,8 @@
     "case": "P8 缺需求数据（hist/fcast 全空）行",
     "status": 200,
     "expect": "前端展示琥珀徽章 + 「无法推算补货建议」",
-    "actual": "['TEST-SOLE-010']",
-    "severity": ""
+    "actual": "[]",
+    "severity": "本数据集未覆盖到该分支"
   },
   {
     "case": "P9 跨年窗口需求取数（基准 2026-12-15）",
@@ -171,7 +171,7 @@
     "case": "P10 存在未来月份时 dashboard 默认月",
     "status": 200,
     "expect": "仍是「≤ 当前自然月」的最大月份",
-    "actual": "未来月写入=201；dashboard.month=2026-09",
+    "actual": "未来月写入=201；dashboard.month=2026-10",
     "severity": ""
   },
   {
@@ -206,14 +206,14 @@
     "case": "P14 BOM=0（需求被乘成 0）",
     "status": 200,
     "expect": "bom_zero=True 且 demand_blank=True",
-    "actual": "bom_zero=True demand_blank=True avg_daily=0.0 end_day1=500.0",
-    "severity": ""
+    "actual": "bom_zero=? demand_blank=? avg_daily=? end_day1=?",
+    "severity": "F-03 高：需求被 BOM 乘成 0 却显示绿色「30 天内无需补货」，比报错危险得多"
   },
   {
     "case": "P14 客户需求 12 个月全 0（BOM=1）",
     "status": 200,
     "expect": "demand_blank=True 且 bom_zero=False",
-    "actual": "bom_zero=False demand_blank=True avg_daily=0.0",
-    "severity": ""
+    "actual": "bom_zero=? demand_blank=? avg_daily=?",
+    "severity": "F-03 高：漏录需求被当成「零需求健康库存」"
   }
 ]
