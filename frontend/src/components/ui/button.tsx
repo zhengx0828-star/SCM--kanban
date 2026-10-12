@@ -41,20 +41,25 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
-  className,
-  variant = "default",
-  size = "default",
-  asChild = false,
-  ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean
-  }) {
+/**
+ * ★ 必须 forwardRef：本仓库是 React 18，函数组件接不住 ref，而 radix 的 `asChild`
+ *   会用 `Slot` 把 ref 合并到子元素上（如 `<DialogPrimitive.Close asChild><Button/></DialogPrimitive.Close>`）。
+ *   不转发时：① 每次打开弹窗都打「Function components cannot be given refs」警告；
+ *   ② **ref 静默失效** → radix 拿不到该节点，焦点管理/返回焦点会不准。
+ *   （`ui/` 目录里原本只有 checkbox.tsx 做了转发，属于 shadcn 新版模板与 React 18 的错配。）
+ */
+const Button = React.forwardRef<
+  HTMLButtonElement,
+  React.ComponentProps<"button"> &
+    VariantProps<typeof buttonVariants> & {
+      asChild?: boolean
+    }
+>(function Button({ className, variant = "default", size = "default", asChild = false, ...props }, ref) {
   const Comp = asChild ? Slot.Root : "button"
 
   return (
     <Comp
+      ref={ref}
       data-slot="button"
       data-variant={variant}
       data-size={size}
@@ -62,6 +67,6 @@ function Button({
       {...props}
     />
   )
-}
+})
 
 export { Button, buttonVariants }

@@ -8,8 +8,14 @@ import {
   ClipboardList,
   FileUp,
   Inbox,
+  Link2,
   RefreshCcw,
+  Scale,
+  ShieldAlert,
+  Shuffle,
+  TrendingUp,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +34,7 @@ import {
   useShareRisks,
   useShareSummary,
 } from "@/hooks/use-share";
-import { getApiErrorMessage } from "@/lib/utils";
+import { cn, getApiErrorMessage } from "@/lib/utils";
 import { RISK_TYPE_FALLBACK, RISK_TYPE_LABELS, RISK_TYPE_META, type ShareRiskItem } from "@/types/share";
 
 /** 当前月份（YYYY-MM） */
@@ -67,9 +73,13 @@ function parseRiskFilter(value: string | null): RiskFilter {
 /**
  * 份额管理 · 项目入口页。
  *
- * 顶部：项目列表（有份额数据的项目卡片，点击进入该项目视图）
- * 选中项目后：月份切换 + KPI 卡 + 风险排行 + 四象限
+ * 顶部：预警概览（KPI 卡 × 5，口径 = 当前月份 + 当前项目）
+ * 其次：项目选择（项目卡片，点击切换当前项目，上方预警随之联动）
+ * 再往下：风险排行 + 四象限
  * 明细表独立页面（/share/records?project_id=&month=）——物料/项目多时避免页面过长
+ *
+ * ⚠️ 页面顺序是「预警框在上、项目选择在下」（2026-10-04 按要求调换过），
+ *    不要把项目列表挪回 KPI 卡之前。
  */
 export default function SharePage() {
   const navigate = useNavigate();
@@ -174,15 +184,52 @@ export default function SharePage() {
               </div>
             </div>
 
-            {/* 项目列表 */}
+            {/* 预警概览：位置**固定**在「选择项目」之上（先看风险，再挑项目）。
+                ⚠️ 无份额数据的项目也要保留这一区块（换成空态），否则整块消失、
+                页面退回「选择项目在最上」的旧观感 —— 看起来就像版式没改过、彩色卡也不见了。 */}
+            {projectId && list.length > 0 && activeProject && (
+              <>
+                <div className="mt-8 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-sm font-medium text-muted-foreground">预警概览</h2>
+                  <Badge variant="secondary" className="font-normal">
+                    当前：{activeProject.name}（{activeProject.code}）· {month}
+                  </Badge>
+                </div>
+                {activeProject.months.length === 0 ? (
+                  <EmptyState
+                    className="mt-3"
+                    icon={<FileUp className="h-6 w-6" />}
+                    title={`项目「${activeProject.name}」暂无份额数据`}
+                    description="先在份额明细录入或导入份额数据，再回来看独供 / 波动 / 偏差 / 错配四类预警"
+                    action={
+                      <Button onClick={goRecords}>
+                        <FileUp className="mr-1.5 h-4 w-4" />
+                        去录入份额
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                    <KpiCard label="独供物料" icon={ShieldAlert} value={summary?.sole_materials} loading={summaryLoading} tone="red"
+                      onClick={() => setRiskFilter("sole")}
+                      sub={summary ? `占物料总数 ${pct(summary.sole_materials, summary.total_materials)}` : undefined} />
+                    <KpiCard label="份额波动预警" icon={TrendingUp} value={summary?.fluctuation_alerts} loading={summaryLoading} tone="amber"
+                      onClick={() => setRiskFilter("fluctuation")} sub="相对上月变化 ≥ ±30%" />
+                    <KpiCard label="建议偏差预警" icon={Scale} value={summary?.deviation_alerts} loading={summaryLoading} tone="amber"
+                      onClick={() => setRiskFilter("deviation")} sub="|本月 − 上月建议| > 5pt" />
+                    <KpiCard label="份额×评分错配" icon={Shuffle} value={summary?.mismatch_alerts} loading={summaryLoading} tone="violet"
+                      onClick={() => setRiskFilter("mismatch")} sub="份额 ≥ 50% 但加权分 < 0.5" />
+                    <KpiCard label="高粘性供应商" icon={Link2} value={summary?.sticky_suppliers} loading={summaryLoading} tone="blue" sub="当月覆盖物料 ≥ 3" />
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 项目选择 */}
             <div className="mt-8">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-medium text-muted-foreground">选择项目</h2>
-                {activeProject && (
-                  <Badge variant="secondary" className="font-normal">
-                    当前：{activeProject.name}（{activeProject.code}）
-                  </Badge>
-                )}
+                <span className="text-xs text-muted-foreground">点击切换当前项目 · 上方预警概览随之联动</span>
               </div>
               {projectsLoading ? (
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -249,31 +296,9 @@ export default function SharePage() {
               )}
             </div>
 
-            {/* 选中项目后的 KPI + 风险 + 四象限 */}
-            {projectId && list.length > 0 && activeProject && activeProject.months.length === 0 ? (
-              <EmptyState
-                className="mt-8"
-                icon={<FileUp className="h-7 w-7" />}
-                title={`项目「${activeProject.name}」暂无份额数据`}
-                description="点击下方「去录入」进入份额明细，手动录入或 Excel 导入首批份额数据"
-                action={
-                  <Button onClick={goRecords}>
-                    <FileUp className="mr-1.5 h-4 w-4" />
-                    去录入份额
-                  </Button>
-                }
-              />
-            ) : projectId && list.length > 0 && (
+            {/* 风险排行 + 四象限（预警概览已在「选择项目」之上，这里的空态也在那边） */}
+            {projectId && list.length > 0 && activeProject && activeProject.months.length > 0 && (
               <>
-                {/* KPI 卡 × 4 */}
-                <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <KpiCard label="独供物料" value={summary?.sole_materials} loading={summaryLoading} tone="red"
-                    sub={summary ? `占物料总数 ${pct(summary.sole_materials, summary.total_materials)}` : undefined} />
-                  <KpiCard label="份额波动预警" value={summary?.fluctuation_alerts} loading={summaryLoading} tone="amber" sub="相对上月变化 ≥ ±30%" />
-                  <KpiCard label="建议偏差预警" value={summary?.deviation_alerts} loading={summaryLoading} tone="amber" sub="|本月 − 上月建议| > 5pt" />
-                  <KpiCard label="高粘性供应商" value={summary?.sticky_suppliers} loading={summaryLoading} tone="blue" sub="当月覆盖物料 ≥ 3" />
-                </div>
-
                 {/* 风险排行 */}
                 <Card className="mt-6">
                   <CardContent className="p-5">
@@ -371,28 +396,76 @@ export default function SharePage() {
 /*  子组件 / 工具                                                               */
 /* -------------------------------------------------------------------------- */
 
-function KpiCard({ label, value, loading, tone, sub }: {
+/**
+ * 预警概览 5 张卡的配色 —— 与库存页 DOH 四卡同一套视觉语言：
+ * 浅色底 + 彩色边框 + 顶部色条 + 彩色数字 + 彩色图标块。
+ *
+ * ⚠️ 底色用**显式浅色**（`bg-red-50/70`）而不是 `bg-red-500/10`：
+ *    `Card` 自带 `bg-card`，`cn`=tailwind-merge 以「后写的胜出」消解冲突，
+ *    显式浅色更稳（与 `INV_DOH_BUCKET_META.cardCls` 保持一致的做法）。
+ * 值恒为 0 的卡也保留配色 —— 颜色表达「这类风险的严重度」，不是「有没有风险」。
+ */
+const KPI_TONES = {
+  red: {
+    card: "border-red-300 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10",
+    bar: "bg-red-600",
+    value: "text-red-700 dark:text-red-400",
+    chip: "bg-red-500/15 text-red-700 dark:text-red-400",
+  },
+  amber: {
+    card: "border-amber-200 bg-amber-50/70 dark:border-amber-500/30 dark:bg-amber-500/5",
+    bar: "bg-amber-400",
+    value: "text-amber-700 dark:text-amber-400",
+    chip: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  },
+  violet: {
+    card: "border-violet-200 bg-violet-50/70 dark:border-violet-500/30 dark:bg-violet-500/5",
+    bar: "bg-violet-400",
+    value: "text-violet-700 dark:text-violet-400",
+    chip: "bg-violet-500/15 text-violet-700 dark:text-violet-400",
+  },
+  blue: {
+    card: "border-blue-200 bg-blue-50/70 dark:border-blue-500/30 dark:bg-blue-500/5",
+    bar: "bg-blue-400",
+    value: "text-blue-700 dark:text-blue-400",
+    chip: "bg-blue-500/15 text-blue-700 dark:text-blue-400",
+  },
+} as const;
+
+type KpiTone = keyof typeof KPI_TONES;
+
+function KpiCard({ label, value, loading, tone, sub, icon: Icon, onClick }: {
   label: string;
   value?: number;
   loading: boolean;
-  tone: "red" | "amber" | "blue";
+  tone: KpiTone;
   sub?: string;
+  icon: LucideIcon;
+  onClick?: () => void;
 }) {
-  const color = tone === "red"
-    ? "text-red-600 dark:text-red-400"
-    : tone === "amber"
-      ? "text-amber-600 dark:text-amber-400"
-      : "text-blue-600 dark:text-blue-400";
+  const t = KPI_TONES[tone];
   return (
-    <Card>
+    <Card
+      className={cn("relative overflow-hidden", t.card, onClick && "cursor-pointer transition-all hover:shadow-sm")}
+      onClick={onClick}
+    >
+      {/* 顶部色条：色觉之外的第二重编码（与库存页四卡一致） */}
+      <span className={cn("absolute inset-x-0 top-0 h-[3px]", t.bar)} />
       <CardContent className="p-4">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        {loading ? (
-          <Skeleton className="mt-2 h-7 w-12" />
-        ) : (
-          <p className={`mt-1 text-2xl font-medium ${color}`}>{value ?? 0}</p>
-        )}
-        {sub && <p className="mt-1 text-[11px] text-muted-foreground">{sub}</p>}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs text-muted-foreground" title={label}>{label}</p>
+            {loading ? (
+              <Skeleton className="mt-1.5 h-7 w-12" />
+            ) : (
+              <p className={cn("mt-1 text-2xl font-semibold tabular-nums", t.value)}>{value ?? 0}</p>
+            )}
+            {sub && <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{sub}</p>}
+          </div>
+          <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", t.chip)}>
+            <Icon className="h-4 w-4" />
+          </span>
+        </div>
       </CardContent>
     </Card>
   );

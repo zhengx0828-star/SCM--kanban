@@ -84,6 +84,8 @@ export interface ShareSummary {
   sole_materials: number;
   fluctuation_alerts: number;
   deviation_alerts: number;
+  /** 份额×评分错配条数（份额 ≥50% 但加权分 <0.5） */
+  mismatch_alerts: number;
   sticky_suppliers: number;
 }
 

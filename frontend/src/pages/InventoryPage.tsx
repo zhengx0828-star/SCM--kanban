@@ -22,7 +22,9 @@ import { useInventoryExport, useInventoryPlans, useInventoryProjectOverview, use
 import { getApiErrorMessage } from "@/lib/utils";
 import {
   INV_DOH_BUCKET,
+  dohBucketLabels,
   dohBucketMeta,
+  parseBuckets,
   type InventoryDensity,
   type InventoryDayUpdateInput,
   type InventoryFilter,
@@ -33,15 +35,25 @@ import type { MultiSelectOption } from "@/components/ui/multi-select-filter";
 /**
  * 库存信号塔（三层结构）
  *
- * L0 项目卡片墙 —— 未选项目不加载物料（物料再多也不会堆在主页面）
- * L1 库存总览   —— 顶部 DOH 四卡 + 下单时机细条 + 紧凑列表（DOH 为第一视线）
+ * 顶部 DOH 四卡预警框 —— 先看风险：未选项目 = 全部项目合计，已选项目 = 已选项目口径
+ * L0 项目卡片墙 —— 项目选择（可多选）；未选项目不加载物料（物料再多也不会堆在主页面）
+ * L1 库存总览   —— 选定项目后展开：下单时机细条 + 工具栏 + 紧凑列表（DOH 为第一视线）
  * L2 详情抽屉   —— 30 天 × 5 层矩阵（横向滚动只发生在抽屉内）
+ *
+ * ⚠️ 页面顺序是「预警框在上、项目选择在下」（2026-10-04 按要求调换过），
+ *    不要把 ProjectCardWall 挪回四卡之前。
  *
  * 状态全部走 URL query（可分享 / 可刷新保留）：
  *   ?project=1,2 &bucket=urgent &pn=&sup=&base=&plan=123
+ *
+ * `bucket` 支持逗号多档（`stockout,urgent`）—— Dashboard「库存天数 < 3」卡
+ * 把「已断货 + 紧急」两档一起带过来，四卡与列表口径才一致。
  */
 
 const PAGE_SIZE = 50;
+
+/** 空集常量（L0 全局四卡不可点，用同一个空集合，避免每次渲染新建） */
+const NO_BUCKETS: ReadonlySet<string> = new Set<string>();
 
 export default function InventoryPage() {
   const [sp, setSp] = useSearchParams();
@@ -59,7 +71,8 @@ export default function InventoryPage() {
   const hasProject = projSel.size > 0;
 
   // ---- L1 筛选 ----
-  const bucket = sp.get("bucket") ?? "";
+  // bucket 支持逗号多档（Dashboard「库存天数 < 3」= stockout,urgent）
+  const bucketSel = useMemo(() => new Set(parseBuckets(sp.get("bucket"))), [sp]);
   const sort = sp.get("sort") ?? "doh";
   const keyword = sp.get("q") ?? "";
   const pnSel = useMemo(() => new Set((sp.get("pn") ?? "").split(",").filter(Boolean)), [sp]);
@@ -91,12 +104,12 @@ export default function InventoryPage() {
       base_ids: [...baseSel].join(","),
       supplier_ids: [...supSel].join(","),
       pns: [...pnSel].join(","),
-      bucket,
+      bucket: [...bucketSel].join(","),
       sort,
       service_z: serviceZ,
       excess,
     }),
-    [projSel, baseSel, supSel, pnSel, bucket, sort, serviceZ, excess]
+    [projSel, baseSel, supSel, pnSel, bucketSel, sort, serviceZ, excess]
   );
 
   const overviewQ = useInventoryProjectOverview(serviceZ, excess);
@@ -125,23 +138,38 @@ export default function InventoryPage() {
     return acc;
   }, [projects]);
 
-  // ---- L1：四卡统计（基于当前已选项目 + 非 bucket 筛选，与后端口径一致）----
+  // ---- L1：四卡统计 ----
+  // 数字只汇总「已选项目」的项目级 DOH 分档（project-overview），与 L0 项目卡上的角标同源。
+  //
+  // ⚠️ 不能改成统计 `plans`：`plans` 本身已按 bucket 过滤，一旦筛出某一档，
+  // 其余档立刻显示 0 —— 与上方项目卡角标自相矛盾（Dashboard 卡带 bucket 跳进来时最明显：
+  // 卡上写「2」，落地页却显示 偏低 0 / 充足 0，而项目卡明明写着 偏低 2 充足 2）。
+  // 四卡是「当前已选项目」这个语境的全局镜头，工具栏（物料/供应商/基地/搜索）只收窄下方列表。
   const rowBuckets = useMemo(() => {
     const acc = { stockout: 0, urgent: 0, low: 0, ok: 0, unknown: 0, unknown_no_series: 0, unknown_bom_zero: 0, unknown_demand_blank: 0 };
-    for (const p of plans) {
-      const b = p.doh_bucket;
-      if (b === INV_DOH_BUCKET.unknown) {
-        acc.unknown += 1;
-        if (p.hist.length === 0 && p.fcast.length === 0) acc.unknown_no_series += 1;
-        else if (p.bom_zero) acc.unknown_bom_zero += 1;
-        else acc.unknown_demand_blank += 1;
-      } else if (b === INV_DOH_BUCKET.stockout) acc.stockout += 1;
-      else if (b === INV_DOH_BUCKET.urgent) acc.urgent += 1;
-      else if (b === INV_DOH_BUCKET.low) acc.low += 1;
-      else acc.ok += 1;
+    for (const p of projects) {
+      if (!projSel.has(String(p.project_id))) continue;
+      const b = p.doh_buckets;
+      acc.stockout += b.stockout;
+      acc.urgent += b.urgent;
+      acc.low += b.low;
+      acc.ok += b.ok;
+      acc.unknown += b.unknown;
+      acc.unknown_no_series += b.unknown_no_series;
+      acc.unknown_bom_zero += b.unknown_bom_zero;
+      acc.unknown_demand_blank += b.unknown_demand_blank;
     }
     return acc;
-  }, [plans]);
+  }, [projects, projSel]);
+
+  /** 已选项目的推算单元总数（四卡占比条的分母，与 rowBuckets 同语境） */
+  const selectedPlanCount = useMemo(
+    () => projects.reduce((a, p) => (projSel.has(String(p.project_id)) ? a + p.plan_count : a), 0),
+    [projects, projSel]
+  );
+
+  /** 全部项目的推算单元总数（未选项目时四卡的占比条分母） */
+  const globalPlanCount = useMemo(() => projects.reduce((a, p) => a + p.plan_count, 0), [projects]);
 
   // ---- 下单时机细条统计 ----
   const timing = useMemo(() => {
@@ -344,7 +372,15 @@ export default function InventoryPage() {
   const selectAllProjects = () => update({ project: projects.map((p) => p.project_id).join(",") });
   const clearProjects = () => update({ project: null, plan: null, bucket: null, timing: null });
 
-  const hasFilters = pnSel.size > 0 || supSel.size > 0 || baseSel.size > 0 || keyword !== "" || bucket !== "" || timingSel !== "";
+  /** 切换某个 DOH 档位（多选；与「下单时机细条」互斥），全不选 = 不过滤 */
+  const toggleBucket = (b: string) => {
+    const next = new Set(bucketSel);
+    if (next.has(b)) next.delete(b);
+    else next.add(b);
+    update({ bucket: [...next].join(","), timing: null });
+  };
+
+  const hasFilters = pnSel.size > 0 || supSel.size > 0 || baseSel.size > 0 || keyword !== "" || bucketSel.size > 0 || timingSel !== "";
   const clearFilters = () => update({ pn: null, sup: null, base: null, q: null, bucket: null, timing: null });
   const doExport = () =>
     exportMut.mutate(filters, {
@@ -400,19 +436,40 @@ export default function InventoryPage() {
               </div>
             </div>
 
-            {/* ============ L0：项目卡片墙 ============ */}
-            <ProjectCardWall
-              projects={projects}
-              selected={projSel}
-              onToggle={toggleProject}
-              onSelectAll={selectAllProjects}
-              onClearAll={clearProjects}
-              isLoading={overviewQ.isLoading}
-              onBulkCreate={() => setBulkOpen(true)}
-              onImport={() => setImportOpen(true)}
-            />
+            {/* ============ 预警框：DOH 四卡（放在项目选择之上，先看风险再挑项目）============
+                未选项目 = 全部项目合计口径（不可点）；已选项目 = 已选项目口径（可点多选筛选）。
+                统计口径永远是「已选项目的项目级分档」，不随工具栏筛选变化。 */}
+            {projects.length > 0 && (
+              <div className="mt-6">
+                <DohBucketCards
+                  buckets={hasProject ? rowBuckets : globalBuckets}
+                  active={hasProject ? bucketSel : NO_BUCKETS}
+                  onToggle={hasProject ? toggleBucket : () => undefined}
+                  totalRows={hasProject ? selectedPlanCount : globalPlanCount}
+                />
+                <p className="mt-2 text-center text-[11px] text-muted-foreground">
+                  {hasProject
+                    ? `口径 = 已选 ${projSel.size} 个项目的推算单元分档 · 点击卡片可筛选下方列表`
+                    : "以上为全部项目的合计口径 · 勾选下方项目后可按项目管理"}
+                </p>
+              </div>
+            )}
 
-            {/* ============ L1：库存总览 ============ */}
+            {/* ============ L0：项目卡片墙（项目选择，可多选）============ */}
+            <div className="mt-6">
+              <ProjectCardWall
+                projects={projects}
+                selected={projSel}
+                onToggle={toggleProject}
+                onSelectAll={selectAllProjects}
+                onClearAll={clearProjects}
+                isLoading={overviewQ.isLoading}
+                onBulkCreate={() => setBulkOpen(true)}
+                onImport={() => setImportOpen(true)}
+              />
+            </div>
+
+            {/* ============ L1：库存总览（已选项目后展开）============ */}
             {hasProject && (
               <div className="mt-6 space-y-4">
                 {/* 已选项目 chip 行 */}
@@ -442,13 +499,8 @@ export default function InventoryPage() {
                   </Button>
                 </div>
 
-                {/* 顶部四卡 = DOH 四档（点击过滤，与时机细条互斥） */}
-                <DohBucketCards
-                  buckets={rowBuckets}
-                  active={bucket || null}
-                  onSelect={(b) => update({ bucket: b, timing: null })}
-                  totalRows={plans.length}
-                />
+                {/* ⚠️ DOH 四卡（预警框）已统一上移到「项目选择」之上，此处不要再放一份，
+                    否则已选项目时会出现两排四卡。L1 从这里开始：已选项目 chip → 下单时机细条 → 工具栏 → 列表 */}
 
                 {/* 下单时机细条（原漏斗降级保留） */}
                 <OrderTimingBar
@@ -494,8 +546,8 @@ export default function InventoryPage() {
                       <EmptyState
                         icon={<CircleDot className="h-7 w-7" />}
                         title={
-                          bucket !== ""
-                            ? `「${dohBucketMeta(bucket).label}」档没有推算单元`
+                          bucketSel.size > 0
+                            ? `「${dohBucketLabels(bucketSel)}」档没有推算单元`
                             : timingSel !== ""
                               ? "该时段没有需要下单的推算单元"
                               : keyword !== "" || pnSel.size > 0 || supSel.size > 0 || baseSel.size > 0
@@ -503,7 +555,7 @@ export default function InventoryPage() {
                                 : "所选项目暂无推算单元"
                         }
                         description={
-                          bucket === INV_DOH_BUCKET.unknown
+                          bucketSel.has(INV_DOH_BUCKET.unknown)
                             ? "当前没有需求数据不可用的行 —— 也可能是筛选后为空，可恢复全部再看"
                             : "放宽筛选条件，或恢复全部后再试"
                         }
@@ -526,9 +578,9 @@ export default function InventoryPage() {
                             共 <b className="text-foreground">{rows.length}</b> 行
                             {rows.length !== plans.length && `（已筛选，全量 ${plans.length}）`}
                           </span>
-                          {bucket !== "" && (
-                            <span className={`rounded px-1.5 py-px ${dohBucketMeta(bucket).chipCls}`}>
-                              DOH：{dohBucketMeta(bucket).label}
+                          {bucketSel.size > 0 && (
+                            <span className={`rounded px-1.5 py-px ${dohBucketMeta([...bucketSel][0]).chipCls}`}>
+                              DOH：{dohBucketLabels(bucketSel)}
                             </span>
                           )}
                           {timingSel !== "" && (
@@ -607,21 +659,6 @@ export default function InventoryPage() {
                     </button>
                   </div>
                 )}
-              </div>
-            )}
-
-            {/* L0 提供全局四档概览（未选项目时也能看到总体风险） */}
-            {!hasProject && projects.length > 0 && (
-              <div className="mt-6">
-                <DohBucketCards
-                  buckets={globalBuckets}
-                  active={null}
-                  onSelect={() => undefined}
-                  totalRows={projects.reduce((a, p) => a + p.plan_count, 0)}
-                />
-                <p className="mt-2 text-center text-[11px] text-muted-foreground">
-                  以上为全部项目的合计口径 · 勾选项目后可按项目管理
-                </p>
               </div>
             )}
           </div>

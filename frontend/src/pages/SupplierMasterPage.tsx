@@ -810,8 +810,17 @@ export default function SupplierMasterPage() {
               <div className="flex items-center gap-2">{headerAction}</div>
             </div>
 
-            {/* Tab 切换 */}
-            <div className="mt-8 flex items-center gap-1 border-b">
+            {/* Tab 切换。
+                ★ 窄屏两件事都要做，缺一不可：
+                  ① `overflow-x-auto` + 按钮 `shrink-0 whitespace-nowrap` —— 否则 390px 下
+                     4 个中文标签会被挤成两行（「物/料」「供应关/系」）：不溢出、不截断、
+                     控制台干净，但排版已经塌了，属典型的窄屏静默降级。
+                  ② 窄屏收起图标（`hidden sm:block`）—— 实测内容区只有 342px，
+                     而「图标 + 文案」四个 Tab 要 386px，**溢出 44px**，第四个 Tab 会被裁掉
+                     （只能靠横向滑动才看得到，手机上等于没有）。收起 4 个图标 + 相应间距
+                     省下约 110px，四个 Tab 全部可见。图标在 ≥640px 恢复。
+                     这是响应式取舍：窄屏要的是「四个 Tab 都看得见」，不是图标。 */}
+            <div className="mt-8 flex items-center gap-1 overflow-x-auto border-b">
               {(
                 [
                   { key: "projects", label: "项目", icon: <FolderKanban className="h-4 w-4" /> },
@@ -825,13 +834,13 @@ export default function SupplierMasterPage() {
                   type="button"
                   onClick={() => setTab(t.key)}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-t-md px-3 py-2 text-sm transition-colors",
+                    "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-md px-3 py-2 text-sm transition-colors",
                     tab === t.key
                       ? "border-b-2 border-primary font-medium text-primary"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
-                  {t.icon}
+                  <span className="hidden shrink-0 sm:block">{t.icon}</span>
                   {t.label}
                 </button>
               ))}
@@ -861,12 +870,20 @@ export default function SupplierMasterPage() {
                           <p className="py-8 text-center text-sm text-muted-foreground">暂无物料，点击右上角「新增物料」</p>
                         ) : (
                           materials.map((m) => (
-                            <button
+                            // ★ 同上：这一行里也套了「删除物料」按钮，不能用原生 <button>
+                            <div
                               key={m.id}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
                               onClick={() => setSelectedMaterialId(m.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setSelectedMaterialId(m.id);
+                                }
+                              }}
                               className={cn(
-                                "flex w-full items-center justify-between rounded-lg border px-3 py-2.5 text-left transition-colors",
+                                "flex w-full cursor-pointer items-center justify-between rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                                 selectedMaterialId === m.id
                                   ? "border-primary/40 bg-primary/5"
                                   : "border-transparent hover:bg-accent"
@@ -890,7 +907,7 @@ export default function SupplierMasterPage() {
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
                               </div>
-                            </button>
+                            </div>
                           ))
                         )}
                       </div>
@@ -1160,11 +1177,22 @@ export default function SupplierMasterPage() {
                           </p>
                         ) : (
                           allProjects.map((p) => (
-                            <button
+                            // ★ 这里**不能**用原生 <button>：卡里还有「编辑 / 删除」两个 ui/button，
+                            //   button 套 button 是无效 HTML（React 会报 validateDOMNesting），
+                            //   而且屏幕阅读器会把整卡读成三个相邻按钮。改用 role="button" + 键盘处理，
+                            //   与 ProjectChangeCard 的整卡可点写法保持一致。
+                            <div
                               key={p.id}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
                               onClick={() => setSelectedProjectId(p.id)}
-                              className="flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors hover:bg-accent/60"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setSelectedProjectId(p.id);
+                                }
+                              }}
+                              className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               <div className="flex min-w-0 items-center gap-2.5">
                                 <div className="min-w-0">
@@ -1199,7 +1227,7 @@ export default function SupplierMasterPage() {
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </Button>
                               </div>
-                            </button>
+                            </div>
                           ))
                         )}
                       </div>

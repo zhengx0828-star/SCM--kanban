@@ -21,7 +21,10 @@ import { cn } from "@/lib/utils";
  *   ④ 充足      DOH ≥ LeadTime
  *   ⑤ 无法评估  需求不可用三档（缺需求 / BOM=0 / 需求为 0）—— 绝不入绿档
  *
- * 点击卡片 = 过滤出该档；再点一次取消（与「下单时机细条」互斥）。
+ * 点击卡片 = 切换该档过滤（**可多选**）；全不选 = 不过滤（与「下单时机细条」互斥）。
+ *
+ * 多选是为了承接 Dashboard 的跳转：「库存天数 < 3」卡 = 已断货 + 紧急**两档合计**，
+ * 跳过来必须能同时高亮并同时过滤这两档，否则卡上数字与列表行数对不上。
  */
 
 const ICONS: Record<InvDohBucket, typeof AlertOctagon> = {
@@ -34,19 +37,20 @@ const ICONS: Record<InvDohBucket, typeof AlertOctagon> = {
 
 interface Props {
   buckets: InventoryDohBuckets;
-  active: string | null;
-  onSelect: (bucket: string | null) => void;
+  /** 当前生效的档位（多选；空集 = 不过滤） */
+  active: ReadonlySet<string>;
+  onToggle: (bucket: string) => void;
   totalRows: number;
 }
 
-export function DohBucketCards({ buckets, active, onSelect, totalRows }: Props) {
+export function DohBucketCards({ buckets, active, onToggle, totalRows }: Props) {
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
       {INV_DOH_BUCKET_ORDER.map((bucket) => {
         const meta = dohBucketMeta(bucket);
         const Icon = ICONS[bucket] ?? HelpCircle;
         const count = buckets[bucket] ?? 0;
-        const isActive = active === bucket;
+        const isActive = active.has(bucket);
         const pct = totalRows > 0 ? (count / totalRows) * 100 : 0;
 
         // 灰卡 hint 必须分列三种成因，方便集中补录
@@ -69,11 +73,11 @@ export function DohBucketCards({ buckets, active, onSelect, totalRows }: Props) 
             role="button"
             tabIndex={0}
             aria-pressed={isActive}
-            onClick={() => onSelect(isActive ? null : bucket)}
+            onClick={() => onToggle(bucket)}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                onSelect(isActive ? null : bucket);
+                onToggle(bucket);
               }
             }}
             className={cn(
@@ -81,7 +85,7 @@ export function DohBucketCards({ buckets, active, onSelect, totalRows }: Props) 
               meta.cardCls,
               isActive && "ring-2 ring-primary ring-offset-1"
             )}
-            title={`${meta.label}（${meta.desc}）\n点击只看这一档；再点一次取消`}
+            title={`${meta.label}（${meta.desc}）\n点击只看这一档；已选可再点取消（可多选）`}
           >
             {/* 顶部色条：色觉之外的第二重编码 */}
             <span className={cn("absolute inset-x-0 top-0 h-[3px]", meta.bar)} />

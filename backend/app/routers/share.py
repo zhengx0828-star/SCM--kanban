@@ -478,6 +478,7 @@ def share_summary(
     sole_materials = 0
     fluctuation_alerts = 0
     deviation_alerts = 0
+    mismatch_alerts = 0
     for r in records:
         risk_type = _risk_chain_type(r)
         if risk_type == "sole":
@@ -486,7 +487,8 @@ def share_summary(
             fluctuation_alerts += 1
         elif risk_type == "deviation":
             deviation_alerts += 1
-        # mismatch 无 KPI 卡，不入卡计数
+        elif risk_type == "mismatch":
+            mismatch_alerts += 1
     # 高粘性供应商：当月覆盖物料数 ≥ 3
     supplier_material_count: dict[int, set[int]] = defaultdict(set)
     for r in records:
@@ -502,6 +504,7 @@ def share_summary(
         sole_materials=sole_materials,
         fluctuation_alerts=fluctuation_alerts,
         deviation_alerts=deviation_alerts,
+        mismatch_alerts=mismatch_alerts,
         sticky_suppliers=sticky,
     )
 

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
-import { FolderKanban, MapPin, Plus, RefreshCw, ShieldAlert, Timer, TrendingUp, X } from "lucide-react";
+import { FolderKanban, GitPullRequestArrow, MapPin, Plus, ShieldAlert, Timer, TrendingUp, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,11 +13,14 @@ import { SiteSidebar } from "@/components/site/SiteSidebar";
 import { SupplierFormDialog } from "@/components/suppliers/SupplierFormDialog";
 import { SupplierDetailDialog } from "@/components/suppliers/SupplierDetailDialog";
 import { useMaterials } from "@/hooks/use-materials";
+import { useInventoryProjectOverview } from "@/hooks/use-inventory";
+import { useChangeSummary } from "@/hooks/use-changes";
 import { useProjectSuppliers, useProjects } from "@/hooks/use-projects";
 import { useSuppliers } from "@/hooks/use-suppliers";
 import { useShareDashboardStats } from "@/hooks/use-share";
 import { cn } from "@/lib/utils";
 import { RISK_META, RISK_ORDER, riskKeyOf, type Supplier, type SupplierRiskKey } from "@/types/supplier";
+import type { ChangeSummary } from "@/types/change";
 
 /**
  * Dashboard 看板页：总结性概览。
@@ -35,26 +38,63 @@ interface StatItem {
   hint: string;
   icon: LucideIcon;
   chip: string;
+  /** 副标语气：有超期 → 红、只有临期 → 黄、其余灰 */
+  hintTone?: "danger" | "warn";
   onClick?: () => void;
 }
 
-/** 除「项目/物料总数」外的演示指标（该卡在组件内实时计算） */
-const BASE_STATS: StatItem[] = [
-  {
-    label: "库存天数 < 3 物料",
-    value: "132",
-    hint: "需紧急补货",
+/**
+ * 库存预警统计卡（数值来自实时接口，无演示数据）：
+ * 库存天数 < 3 = 库存概览里「已断货 + 紧急」两档的推算单元数，与库存页 L0 四卡同源。
+ *
+ * ⚠️ 口径：这是「推算单元数」（项目×物料×供应商×基地），**不是按 PN 去重的物料数**
+ *    （库存塔底「物料数」才是 PN 口径），所以卡名里不带「物料」二字。
+ *
+ * 可点击跳转库存管理：带 `bucket=stockout,urgent`（库存页 bucket 支持逗号多档），
+ * 否则卡上数字与列表行数会对不上。必须同时带 `project`：库存页 L1 只在「已选项目」时渲染，
+ * 只带 bucket 会落到 L0 空视图。这里只带「确实有该档行」的项目。
+ */
+function buildUrgentInventoryStat(
+  urgentUnits: number,
+  urgentProjectIds: string,
+  goInventory: (bucket: string, projectIds: string) => void
+): StatItem {
+  return {
+    label: "库存天数 < 3",
+    value: urgentUnits.toLocaleString(),
+    hint: "已断货 / 紧急，需立即补货 · 点击查看明细",
     icon: Timer,
     chip: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  {
+    onClick: () => goInventory("stockout,urgent", urgentProjectIds),
+  };
+}
+
+/**
+ * 变更进行中 —— Dashboard 卡 5（方案乙，变更管理模块已上线）。
+ *
+ * 大数字 = **进行中的变更单数**；副标 = 「超期 N · 临期 M」，有超期时整行变红。
+ * 数据源与变更页页头同源（`/api/changes/summary`），所以点进去数字和列表对得上。
+ *
+ * 跳转去向：超期或临期任一 > 0 → 变更页并带上 `?risk=overdue,near`（两者一起筛）；
+ * 都为 0 → 直接进变更页（不带着一个空筛选落地）。
+ *
+ * 注意：值为 0 时写「暂无变更」，**不要**写「无法评估 / 暂无数据」——那是数据缺失的语义。
+ */
+function buildChangesStat(summary: ChangeSummary | undefined, goChanges: () => void): StatItem {
+  const active = summary?.active ?? 0;
+  const overdue = summary?.overdue_changes ?? 0;
+  const near = summary?.near_changes ?? 0;
+  const empty = active === 0 && overdue === 0 && near === 0;
+  return {
     label: "变更进行中",
-    value: "45",
-    hint: "待评审 / 执行中",
-    icon: RefreshCw,
-    chip: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
-  },
-];
+    value: active.toLocaleString(),
+    hint: empty ? "暂无变更" : `超期 ${overdue} · 临期 ${near} · 点击查看`,
+    hintTone: overdue > 0 ? "danger" : near > 0 ? "warn" : undefined,
+    icon: GitPullRequestArrow,
+    chip: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+    onClick: goChanges,
+  };
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -65,6 +105,10 @@ export default function DashboardPage() {
   const { data: materialList, isLoading: materialLoading } = useMaterials({ page: 1, page_size: 1 });
   // Dashboard 联动：份额波动 / 重点物料独供（跨项目、最新月，与份额管理同源）
   const { data: shareStats, isLoading: shareStatsLoading } = useShareDashboardStats();
+  // 库存概览：用于「库存天数 < 3」这张卡（与库存页同源，实时口径）
+  const { data: projectOverview, isLoading: overviewLoading } = useInventoryProjectOverview();
+  // 变更统计：用于「变更进行中」这张卡（与变更页页头同源）
+  const { data: changeSummary, isLoading: changeSummaryLoading } = useChangeSummary();
   const [formOpen, setFormOpen] = useState(false);
   const [selected, setSelected] = useState<Supplier | null>(null);
   /* 地图取点录入：pickMode = 取点模式；preset = 最近一次取点的省份 + 坐标（打开弹窗时预填） */
@@ -123,6 +167,59 @@ export default function DashboardPage() {
     return counts;
   }, [mapSuppliers]);
 
+  /* 库存概览聚合：「已断货 + 紧急」（需立刻补货）的推算单元数。
+     与库存页 L0 四卡墙同源（按 project-overview 的 doh_buckets 汇总）。
+     ⚠️ 口径是「推算单元数」（项目×物料×供应商×基地），并非按 PN 去重。
+     同时收集「有该档行的项目 id」与「全部项目 id」，供点击跳转时带上 —— 保证跳过去后行数 == 卡上数字。 */
+  const { urgentUnits, urgentProjectIds, allProjectIds } = useMemo(() => {
+    let urgent = 0;
+    const urgentIds: number[] = [];
+    const allIds: number[] = [];
+    for (const p of projectOverview ?? []) {
+      const b = p.doh_buckets ?? {};
+      const u = (b.stockout ?? 0) + (b.urgent ?? 0);
+      urgent += u;
+      allIds.push(p.project_id);
+      if (u > 0) urgentIds.push(p.project_id);
+    }
+    return {
+      urgentUnits: urgent,
+      urgentProjectIds: urgentIds.join(","),
+      allProjectIds: allIds.join(","),
+    };
+  }, [projectOverview]);
+
+  /**
+   * 跳转库存管理：带「项目 + DOH 档位」两件套。
+   * - 库存页 L1 只在「已选项目」时渲染，**只带 bucket 会落到 L0 空视图**，所以项目必带。
+   * - 命中项目优先（跳过去行数 == 卡上数字）；一档都没命中时退回全部项目，
+   *   让落地页显示「该档没有推算单元」的空态，而不是回到项目墙。
+   */
+  const goInventory = useCallback(
+    (bucket: string, projectIds: string) => {
+      const ids = projectIds || allProjectIds;
+      navigate(ids ? `/inventory?project=${ids}&bucket=${bucket}` : "/inventory");
+    },
+    [navigate, allProjectIds]
+  );
+
+  /**
+   * 跳转变更管理（用户口径 2026-10-05）：**超期 + 临期（3 天内到期）都算「要盯的」**，
+   * 点卡就一起带进筛选，落地即可看到需要处理的那批单。
+   * 两者都为 0 时不带筛选 —— 否则进去是个空筛选列表，比不筛更让人困惑。
+   * 参数名与变更页一致：`?risk=overdue,near`（逗号多选，前端 `matchRisk` 逐项 or）。
+   */
+  const goChanges = useCallback(() => {
+    const overdue = changeSummary?.overdue_changes ?? 0;
+    const near = changeSummary?.near_changes ?? 0;
+    if (overdue === 0 && near === 0) {
+      navigate("/changes");
+      return;
+    }
+    const risks = [overdue > 0 ? "overdue" : null, near > 0 ? "near" : null].filter(Boolean).join(",");
+    navigate(`/changes?risk=${risks}`);
+  }, [navigate, changeSummary]);
+
   const stats = useMemo<StatItem[]>(
     () => [
       {
@@ -150,11 +247,22 @@ export default function DashboardPage() {
         onClick: () =>
           navigate(shareStats?.month ? `/share?risk=sole&month=${shareStats.month}` : "/share"),
       },
-      ...BASE_STATS,
+      buildUrgentInventoryStat(urgentUnits, urgentProjectIds, goInventory),
+      buildChangesStat(changeSummary, goChanges),
     ],
-    [projectList?.total, materialList?.total, shareStats, navigate]
+    [
+      projectList?.total,
+      materialList?.total,
+      shareStats,
+      urgentUnits,
+      urgentProjectIds,
+      goInventory,
+      changeSummary,
+      navigate,
+    ]
   );
-  const statsLoading = projectLoading || materialLoading || shareStatsLoading;
+  const statsLoading =
+    projectLoading || materialLoading || shareStatsLoading || overviewLoading || changeSummaryLoading;
 
   return (
     <div className="min-h-screen bg-background">
@@ -173,7 +281,7 @@ export default function DashboardPage() {
               </p>
             </section>
 
-            {/* 顶部统计卡（项目/物料总数为实时联动数据，其余为演示数据） */}
+            {/* 顶部统计卡：五张全部为实时联动数据（变更进行中已接入变更管理模块） */}
             <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
               {stats.map((stat) => (
                 <Card
@@ -193,7 +301,18 @@ export default function DashboardPage() {
                     ) : (
                       <p className="text-2xl font-semibold tracking-tight tabular-nums">{stat.value}</p>
                     )}
-                    <p className="text-xs text-muted-foreground">{stat.hint}</p>
+                    <p
+                      className={cn(
+                        "text-xs",
+                        stat.hintTone === "danger"
+                          ? "font-medium text-red-600 dark:text-red-400"
+                          : stat.hintTone === "warn"
+                            ? "font-medium text-amber-600 dark:text-amber-400"
+                            : "text-muted-foreground"
+                      )}
+                    >
+                      {stat.hint}
+                    </p>
                   </CardContent>
                 </Card>
               ))}
@@ -287,7 +406,7 @@ export default function DashboardPage() {
 
             {/* 页脚提示 */}
             <p className="mt-6 text-center text-xs text-muted-foreground">
-              看板统计为演示数据，待接入真实业务数据后更新。
+              本页统计均与各业务模块实时同源；地图仅展示已录入的供应商点位。
             </p>
           </div>
         </main>

@@ -156,6 +156,22 @@ export function dohBucketMeta(bucket: string) {
   return INV_DOH_BUCKET_META[bucket as InvDohBucket] ?? INV_DOH_BUCKET_FALLBACK;
 }
 
+/**
+ * 解析 URL 里的 `bucket` 参数 → 档位集合。
+ * 支持逗号多档（Dashboard「库存天数 < 3」卡 = `stockout,urgent`），空 = 不过滤。
+ */
+export function parseBuckets(raw: string | null | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** 多档合并文案：「已断货 + 紧急」（带兜底，不显示 undefined） */
+export function dohBucketLabels(buckets: Iterable<string>): string {
+  return [...buckets].map((b) => dohBucketMeta(b).label).join(" + ");
+}
+
 /* ------------------------------------------------------------------ */
 /* L0 项目卡片墙                                                        */
 /* ------------------------------------------------------------------ */

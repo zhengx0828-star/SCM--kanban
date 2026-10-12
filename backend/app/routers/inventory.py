@@ -764,10 +764,16 @@ def _today_doh(out: InventoryPlanOut) -> float:
 
 
 def _filter_rows(rows: list[InventoryPlanOut], bucket: str) -> list[InventoryPlanOut]:
-    """按四卡档位过滤（bucket 为空 = 不过滤）。"""
-    if not bucket:
+    """按四卡档位过滤（bucket 为空 = 不过滤）。
+
+    支持**逗号分隔多档**（如 `stockout,urgent`）：Dashboard「库存天数 < 3」卡
+    聚合的就是「已断货 + 紧急」两档，跳转时按同一口径带上两档，避免
+    「卡上写 5、列表只有 3 行」的口径不一致。单档传参行为不变。
+    """
+    want = set(_split_csv(bucket))
+    if not want:
         return rows
-    return [r for r in rows if _doh_bucket_of(r) == bucket]
+    return [r for r in rows if _doh_bucket_of(r) in want]
 
 
 def _unknown_last(r: InventoryPlanOut) -> int:
@@ -816,7 +822,7 @@ def list_plans(
     base_ids: str = Query("", description="基地 ID，逗号分隔；空 = 全部"),
     supplier_ids: str = Query("", description="供应商 ID，逗号分隔；空 = 全部"),
     pns: str = Query("", description="物料 PN，逗号分隔；空 = 全部"),
-    bucket: str = Query("", description="顶部四卡过滤：stockout / urgent / low / ok / unknown；空 = 全部"),
+    bucket: str = Query("", description="顶部四卡过滤：stockout / urgent / low / ok / unknown，**支持逗号多档**（如 stockout,urgent）；空 = 全部"),
     sort: str = Query("doh", description="排序：doh(默认,升序) / pn / replenish / lt / order"),
     service_z: float = Query(INV_Z_DEFAULT, gt=0, description="服务水平系数 Z（95% ≈ 1.65）"),
     excess: float = Query(INV_EXCESS_DOH_DEFAULT, gt=0, description="过剩库存天数"),
@@ -1518,7 +1524,7 @@ def export_inventory(
     base_ids: str = Query("", description="基地 ID，逗号分隔；空 = 全部"),
     supplier_ids: str = Query("", description="供应商 ID，逗号分隔；空 = 全部"),
     pns: str = Query("", description="物料 PN，逗号分隔；空 = 全部"),
-    bucket: str = Query("", description="顶部四卡过滤；空 = 全部"),
+    bucket: str = Query("", description="顶部四卡过滤（支持逗号多档）；空 = 全部"),
     sort: str = Query("doh", description="排序，同 /plans"),
     service_z: float = Query(INV_Z_DEFAULT, gt=0),
     excess: float = Query(INV_EXCESS_DOH_DEFAULT, gt=0),

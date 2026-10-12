@@ -65,6 +65,26 @@ import type {
   InventoryProjectOverview,
   InventorySummary,
 } from "../types/inventory";
+import type {
+  Change,
+  ChangeAlertItem,
+  ChangeArchiveRecord,
+  ChangeBurndown,
+  ChangeCreateInput,
+  ChangeDetail,
+  ChangeImportResult,
+  ChangeListParams,
+  ChangeListResponse,
+  ChangeProjectOverview,
+  ChangeSummary,
+  ChangeTaskCreateInput,
+  ChangeTaskNode,
+  ChangeTaskUpdateInput,
+  ChangeType,
+  ChangeTypeCreateInput,
+  ChangeTypeUpdateInput,
+  ChangeUpdateInput,
+} from "../types/change";
 
 /** Axios 实例：开发环境经 Vite 代理转发到后端，无需处理跨域 */
 export const apiClient = axios.create({
@@ -405,5 +425,161 @@ export const baseApi = {
 
   remove(id: number) {
     return apiClient.delete(`/bases/${id}`).then((res) => res.data);
+  },
+};
+
+/* ------------------------------------------------------------------ 变更管理 */
+
+export const changeTypeApi = {
+  /** 变更类型字典（全局，一次维护所有项目共用） */
+  list(includeInactive = true) {
+    return apiClient
+      .get<ChangeType[]>("/change-types", { params: { include_inactive: includeInactive } })
+      .then((res) => res.data);
+  },
+
+  create(data: ChangeTypeCreateInput) {
+    return apiClient.post<ChangeType>("/change-types", data).then((res) => res.data);
+  },
+
+  update(id: number, data: ChangeTypeUpdateInput) {
+    return apiClient.patch<ChangeType>(`/change-types/${id}`, data).then((res) => res.data);
+  },
+
+  remove(id: number) {
+    return apiClient.delete(`/change-types/${id}`).then((res) => res.data);
+  },
+};
+
+export const changeApi = {
+  /** 分页列表（注意：返回分页对象，page_size 上限 100） */
+  list(params: ChangeListParams) {
+    return apiClient.get<ChangeListResponse>("/changes", { params }).then((res) => res.data);
+  },
+
+  /** 详情（含任务树） */
+  get(id: number) {
+    return apiClient.get<ChangeDetail>(`/changes/${id}`).then((res) => res.data);
+  },
+
+  create(data: ChangeCreateInput) {
+    return apiClient.post<Change>("/changes", data).then((res) => res.data);
+  },
+
+  update(id: number, data: ChangeUpdateInput) {
+    return apiClient.patch<Change>(`/changes/${id}`, data).then((res) => res.data);
+  },
+
+  /** 删除：默认软删；hard=true 物理删除（作废后彻底清掉） */
+  remove(id: number, hard = false) {
+    return apiClient.delete(`/changes/${id}`, { params: { hard } }).then((res) => res.data);
+  },
+
+  void(id: number) {
+    return apiClient.post<Change>(`/changes/${id}/void`).then((res) => res.data);
+  },
+
+  restore(id: number) {
+    return apiClient.post<Change>(`/changes/${id}/restore`).then((res) => res.data);
+  },
+
+  archive(id: number, remark?: string) {
+    return apiClient
+      .post<Change>(`/changes/${id}/archive`, null, { params: { remark } })
+      .then((res) => res.data);
+  },
+
+  unarchive(id: number) {
+    return apiClient.post<Change>(`/changes/${id}/unarchive`).then((res) => res.data);
+  },
+
+  /** 整项目归档（只冻结该项目下的变更单，不动其他模块） */
+  archiveProject(projectId: number, remark?: string) {
+    return apiClient
+      .post<ChangeArchiveRecord>(`/changes/archives/project/${projectId}`, null, { params: { remark } })
+      .then((res) => res.data);
+  },
+
+  unarchiveProject(projectId: number) {
+    return apiClient.post(`/changes/archives/project/${projectId}/unarchive`).then((res) => res.data);
+  },
+
+  archives(projectId?: number) {
+    return apiClient
+      .get<ChangeArchiveRecord[]>("/changes/archives", { params: { project_id: projectId } })
+      .then((res) => res.data);
+  },
+
+  /** 全局统计（Dashboard 卡 5 与变更页页头同源） */
+  summary() {
+    return apiClient.get<ChangeSummary>("/changes/summary").then((res) => res.data);
+  },
+
+  /** 项目卡片墙（老板视角，已按超期数降序） */
+  projectOverview(includeArchived = false) {
+    return apiClient
+      .get<ChangeProjectOverview[]>("/changes/project-overview", { params: { include_archived: includeArchived } })
+      .then((res) => res.data);
+  },
+
+  alerts(params: { project_id?: number; level?: string } = {}) {
+    return apiClient.get<ChangeAlertItem[]>("/changes/alerts", { params }).then((res) => res.data);
+  },
+
+  /** 燃尽数据。三个参数都可空 = 全局口径（首页整体燃尽图） */
+  burndown(params: { change_id?: number; project_id?: number; include_archived?: boolean }) {
+    return apiClient.get<ChangeBurndown>("/changes/burndown", { params }).then((res) => res.data);
+  },
+
+  /** 责任人候选（自由文本输入框下方的"最近用过"软提示） */
+  owners() {
+    return apiClient.get<string[]>("/changes/owners").then((res) => res.data);
+  },
+
+  /** Excel 双 sheet 导入（服务器本地路径，前后端同机） */
+  import(filePath: string) {
+    return apiClient
+      .post<ChangeImportResult>("/changes/import", null, { params: { file_path: filePath } })
+      .then((res) => res.data);
+  },
+
+  /** 导出 Excel 的直链（用 window.open 触发下载） */
+  exportUrl(params: { project_id?: number; change_id?: number; archived?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.project_id) qs.set("project_id", String(params.project_id));
+    if (params.change_id) qs.set("change_id", String(params.change_id));
+    qs.set("archived", params.archived ?? "all");
+    return `/api/changes/export?${qs.toString()}`;
+  },
+
+  /** 空模板直链（服务端生成，两个 sheet：变更单 + 待办项） */
+  templateUrl() {
+    return "/api/changes/template";
+  },
+};
+
+export const changeTaskApi = {
+  create(changeId: number, data: ChangeTaskCreateInput) {
+    return apiClient.post<ChangeTaskNode>(`/changes/${changeId}/tasks`, data).then((res) => res.data);
+  },
+
+  /** 批量加任务：一行一个任务名 */
+  batch(changeId: number, data: { text: string; parent_id?: number | null; owner?: string | null }) {
+    return apiClient.post<{ created: number }>(`/changes/${changeId}/tasks/batch`, data).then((res) => res.data);
+  },
+
+  update(taskId: number, data: ChangeTaskUpdateInput) {
+    return apiClient.patch<ChangeTaskNode>(`/change-tasks/${taskId}`, data).then((res) => res.data);
+  },
+
+  /** 勾选 / 取消勾选（后端在勾选瞬间自动写 done_at） */
+  toggle(taskId: number, isDone: boolean) {
+    return apiClient
+      .post<ChangeTaskNode>(`/change-tasks/${taskId}/toggle`, { is_done: isDone })
+      .then((res) => res.data);
+  },
+
+  remove(taskId: number) {
+    return apiClient.delete(`/change-tasks/${taskId}`).then((res) => res.data);
   },
 };

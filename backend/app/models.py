@@ -374,3 +374,135 @@ class InventoryDay(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     plan: Mapped[InventoryPlan] = relationship(back_populates="days")
+
+
+# ---------------------------------------------------------------------------
+# 变更管理（过程数据层）
+#
+# 与前面几张表的关系：变更管理记录「稳态数据被改变的过程」，不动任何既有表。
+# 锚点 = 项目 × 物料（PN）。一张变更单 = 一个物料；同物料同项目可有多张。
+#
+# 设计要点（口径见 docs/changes-redesign/02-方案定稿-v0.2.md §5）：
+#   - 任务的「五色状态」（进行中/临期/超期未完成/按时完成/迟交完成）**不落库**，
+#     全部由 plan_end + is_done + done_at + 今天 推导 → 结构里没有 status 字段。
+#   - 进度百分比也不落库（纯派生：完成率 = 已完叶子 ÷ 叶子总数）。
+#   - level 由后端按 parent.level + 1 推导，封顶 5 层。
+# ---------------------------------------------------------------------------
+
+
+class ChangeType(Base):
+    """变更类型字典（全局，跨项目共用）。
+
+    用户明确：类型「只是一个名字」—— 不做标准任务清单、不做默认负责人/默认周期。
+    被任何变更单引用过的类型只能停用（is_active=False），不能删除，
+    避免历史变更单出现孤儿引用。
+    """
+
+    __tablename__ = "change_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True, comment="类型名（如 供应商切换 / 设计变更 / 成本优化）")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="排序（升序）")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="启用标记；停用而非删除")
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class Change(Base):
+    """变更单：项目 × 物料 × 变更类型。
+
+    状态三态（无审批、无草稿）：
+      - active  进行中（默认）
+      - done    已完成（所有叶子勾完自动进入；也可手动覆盖）
+      - voided  已作废（变更中途停止执行；不参与统计与预警）
+
+    plan_start / plan_end 是**冗余汇总字段**（服务端从叶子任务算出后回写），
+    用于列表排序与卡片预警，避免每次查询都递归任务树。
+    """
+
+    __tablename__ = "changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True, comment="序号（不做 CHG-xxxx 单号）")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False, index=True)
+    change_type_id: Mapped[int] = mapped_column(ForeignKey("change_types.id"), nullable=False, index=True)
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True, comment="涉及的供应商（可选）")
+    title: Mapped[str] = mapped_column(String(200), nullable=False, comment="变更标题")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="变更内容")
+    owner: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="总责任人（自由文本，任务未填时继承它）")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True, comment="active 进行中 / done 已完成 / voided 已作废")
+    plan_start: Mapped[date | None] = mapped_column(Date, nullable=True, comment="计划开始（由叶子任务汇总，冗余）")
+    plan_end: Mapped[date | None] = mapped_column(Date, nullable=True, index=True, comment="计划结束（由叶子任务汇总，冗余；预警依据）")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="实际完成时刻（自动写入，用于算整单迟交天数）")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True, comment="归档时刻（NULL = 未归档；归档后只读）")
+    is_removed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True, comment="软删除标记")
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    project: Mapped["Project"] = relationship()
+    material: Mapped["Material"] = relationship()
+    supplier: Mapped["Supplier | None"] = relationship()
+    change_type: Mapped["ChangeType"] = relationship()
+    tasks: Mapped[list["ChangeTask"]] = relationship(back_populates="change")
+
+
+class ChangeTask(Base):
+    """待办项 / 子项（单表自引用）。
+
+    parent_id IS NULL → 一级待办项；非空 → 子项。level 1..5（封顶 5 层）。
+    **只有叶子填真实的 plan_start / plan_end**；上层由子项汇总（服务层计算，不落库）。
+
+    勾选规则（用户确认）：
+      - 叶子直接勾；
+      - 有子项的父项：子项全勾 → 父项自动已勾；点父项 = 一键全勾 / 全取消。
+    done_at 在勾选瞬间由后端自动写入（用户零录入），用于区分
+    「超期未完成」与「迟交完成」，也是燃尽图实际线的唯一数据源。
+    """
+
+    __tablename__ = "change_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    change_id: Mapped[int] = mapped_column(ForeignKey("changes.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("change_tasks.id", ondelete="CASCADE"), nullable=True, index=True, comment="NULL = 一级待办项"
+    )
+    level: Mapped[int] = mapped_column(Integer, nullable=False, default=1, comment="层级 1..5（后端按 parent.level+1 推导）")
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="同级排序（甘特图自上而下）")
+    name: Mapped[str] = mapped_column(String(200), nullable=False, comment="任务名")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="说明")
+    owner: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="责任人（留空则继承变更单总责任人）")
+    plan_start: Mapped[date | None] = mapped_column(Date, nullable=True, comment="计划开始（叶子填真实值）")
+    plan_end: Mapped[date | None] = mapped_column(Date, nullable=True, index=True, comment="计划完成（预警依据）")
+    is_done: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True, comment="是否完成")
+    done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="完成时刻（勾选瞬间自动写；燃尽图实际线唯一来源）")
+    is_removed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True, comment="软删除标记")
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    change: Mapped["Change"] = relationship(back_populates="tasks")
+    parent: Mapped["ChangeTask | None"] = relationship(remote_side="ChangeTask.id", back_populates="children")
+    children: Mapped[list["ChangeTask"]] = relationship(back_populates="parent")
+
+
+class ChangeArchive(Base):
+    """归档记录（只作用在变更管理模块内部）。
+
+    ⚠️ 项目是供需/份额/库存共用的主数据：整项目归档**只冻结该项目下的变更单**，
+    projects 表一个字段都不动，其他模块完全不受影响。
+
+    scope='project' → 整项目归档（change_id 为 NULL）
+    scope='change'  → 单张变更单归档（change_id 必填）
+    """
+
+    __tablename__ = "change_archives"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(10), nullable=False, comment="project 整项目 / change 单张")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    change_id: Mapped[int | None] = mapped_column(ForeignKey("changes.id", ondelete="CASCADE"), nullable=True, index=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="归档说明")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)

@@ -29,12 +29,20 @@ function DialogClose({
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />
 }
 
-function DialogOverlay({
-  className,
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+/**
+ * ★ 必须 forwardRef（React 18 + radix 组合的老坑）：
+ *   radix 的 `Dialog.Portal` 内部会经 `Primitive.div.Slot` / `Presence` 给子元素合并 ref，
+ *   函数组件接不住 ref → ① 每次打开弹窗都打「Function components cannot be given refs」
+ *   警告；② **ref 静默失效**，radix 拿不到遮罩节点，焦点管理/返回焦点会不准。
+ *   （`ui/` 目录原本只有 checkbox.tsx 做了转发 —— shadcn 新版模板与 React 18 的错配。）
+ */
+const DialogOverlay = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Overlay>,
+  React.ComponentProps<typeof DialogPrimitive.Overlay>
+>(function DialogOverlay({ className, ...props }, ref) {
   return (
     <DialogPrimitive.Overlay
+      ref={ref}
       data-slot="dialog-overlay"
       className={cn(
         "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
@@ -43,7 +51,7 @@ function DialogOverlay({
       {...props}
     />
   )
-}
+})
 
 function DialogContent({
   className,

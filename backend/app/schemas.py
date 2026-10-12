@@ -539,6 +539,7 @@ class ShareSummary(BaseModel):
     sole_materials: int = 0           # 独供物料数（同项目同物料仅 1 家供应商）
     fluctuation_alerts: int = 0       # 份额波动预警条数（相对上期变化 ≥ ±30%）
     deviation_alerts: int = 0         # 建议偏差预警条数（|本月−上月建议|>5pt）
+    mismatch_alerts: int = 0          # 份额×评分错配条数（份额 ≥50% 但加权分 <0.5）
     sticky_suppliers: int = 0         # 高粘性供应商数（当月覆盖物料数 ≥ 3）
 
 
@@ -885,5 +886,389 @@ class InventoryBulkCreateResult(BaseModel):
     """批量建档结果。"""
 
     created: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# 变更管理（过程数据层）
+#
+# 口径见 docs/changes-redesign/02-方案定稿-v0.2.md。
+#
+# ⚠️ 关键：任务的「五色状态」、完成率、时间进度、偏差**全部是派生值**，
+# 由服务层实时算出来塞进响应，数据库里没有对应字段（防不一致）。
+# ---------------------------------------------------------------------------
+
+ChangeStatus = Literal["active", "done", "voided"]
+"""变更单状态：active 进行中 / done 已完成 / voided 已作废。"""
+
+TaskState = Literal["todo", "soon", "overdue", "done", "late"]
+"""任务派生状态（由 plan_end + is_done + done_at + 今天 推出，不落库）：
+todo 未到期 / soon 临期 / overdue 超期未完成 / done 按时完成 / late 迟交完成。"""
+
+ArchiveScope = Literal["project", "change"]
+
+# 任务层级封顶（用户确认：支持多层，但最多 5 层，防止甘特图与报表失控）
+MAX_TASK_LEVEL = 5
+
+# 临期阈值（用户确认 3 天，不做页面配置）
+NEAR_DUE_DAYS = 3
+
+
+# ---- 变更类型字典 ----------------------------------------------------------
+
+
+class ChangeTypeCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, examples=["供应商切换"])
+    sort_order: int = Field(0, ge=0, le=9999)
+    remark: Optional[str] = Field(None, max_length=2000)
+
+
+class ChangeTypeUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    sort_order: Optional[int] = Field(None, ge=0, le=9999)
+    is_active: Optional[bool] = None
+    remark: Optional[str] = Field(None, max_length=2000)
+
+
+class ChangeTypeRead(BaseModel):
+    """类型响应。usage_count = 被多少张变更单引用（决定能否删除）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    sort_order: int
+    is_active: bool
+    remark: Optional[str] = None
+    usage_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---- 变更单 ----------------------------------------------------------------
+
+
+class ChangeCreate(BaseModel):
+    project_id: int = Field(..., ge=1, description="所属项目")
+    material_id: int = Field(..., ge=1, description="物料 ID（一张单一个物料）")
+    change_type_id: int = Field(..., ge=1, description="变更类型")
+    supplier_id: Optional[int] = Field(None, ge=1, description="涉及的供应商（可选）")
+    title: str = Field(..., min_length=1, max_length=200, examples=["MCU 供应商切换"])
+    description: Optional[str] = Field(None, max_length=5000)
+    owner: Optional[str] = Field(None, max_length=100, description="总责任人（任务未填时继承它）")
+    remark: Optional[str] = Field(None, max_length=2000)
+
+
+class ChangeUpdate(BaseModel):
+    """部分更新（PATCH）。注意：plan_start / plan_end 由叶子任务汇总，不接受手改。"""
+
+    change_type_id: Optional[int] = Field(None, ge=1)
+    supplier_id: Optional[int] = Field(None, ge=1)
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=5000)
+    owner: Optional[str] = Field(None, max_length=100)
+    status: Optional[ChangeStatus] = None
+    remark: Optional[str] = Field(None, max_length=2000)
+
+
+class ChangeRead(BaseModel):
+    """变更单响应（含派生指标）。
+
+    派生字段口径（§5）：
+      - done_rate = 已完叶子 ÷ 叶子总数 × 100（人给的答案）
+      - time_rate = 已过时长 ÷ 总时长 × 100（自动的标尺）
+      - deviation = time_rate − done_rate（>0 表示时间跑在人前面 = 滞后）
+    """
+
+    id: int
+    project_id: int
+    project_code: str = ""
+    project_name: str = ""
+    material_id: int
+    material_pn: str = ""
+    material_name: str = ""
+    change_type_id: int
+    change_type_name: str = ""
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    owner: Optional[str] = None
+    status: ChangeStatus = "active"
+    plan_start: Optional[date] = None
+    plan_end: Optional[date] = None
+    completed_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+    remark: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    # ---- 派生 ----
+    leaf_total: int = 0
+    leaf_done: int = 0
+    done_rate: float = 0.0
+    time_rate: float = 0.0
+    deviation: float = 0.0
+    overdue_leaf: int = 0
+    near_leaf: int = 0
+    late_leaf: int = 0
+    overdue_days: int = 0
+    days_left: Optional[int] = None
+    is_archived: bool = False
+
+
+class ChangeList(BaseModel):
+    """分页列表响应（对齐既有分页对象形状）。"""
+
+    items: list[ChangeRead]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+# ---- 任务树 ----------------------------------------------------------------
+
+
+class ChangeTaskCreate(BaseModel):
+    parent_id: Optional[int] = Field(None, ge=1, description="留空 = 一级待办项")
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    owner: Optional[str] = Field(None, max_length=100)
+    plan_start: Optional[date] = None
+    plan_end: Optional[date] = None
+    seq: Optional[int] = Field(None, ge=0)
+
+
+class ChangeTaskUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    owner: Optional[str] = Field(None, max_length=100)
+    plan_start: Optional[date] = None
+    plan_end: Optional[date] = None
+    seq: Optional[int] = Field(None, ge=0)
+    is_done: Optional[bool] = None
+
+
+class ChangeTaskToggle(BaseModel):
+    is_done: bool
+
+
+class ChangeTaskBatchCreate(BaseModel):
+    """批量加任务：一行一个任务名（比 Excel 更快，覆盖 80% 场景）。"""
+
+    parent_id: Optional[int] = Field(None, ge=1)
+    text: str = Field(..., min_length=1, max_length=20000)
+    owner: Optional[str] = Field(None, max_length=100)
+
+
+class ChangeTaskNode(BaseModel):
+    """任务树节点（递归）。children 为空 = 叶子。"""
+
+    id: int
+    change_id: int
+    parent_id: Optional[int] = None
+    level: int = 1
+    seq: int = 0
+    name: str
+    description: Optional[str] = None
+    owner: Optional[str] = None
+    plan_start: Optional[date] = None
+    plan_end: Optional[date] = None
+    is_done: bool = False
+    done_at: Optional[datetime] = None
+    remark: Optional[str] = None
+
+    # ---- 派生 ----
+    state: TaskState = "todo"
+    overdue_days: int = 0
+    late_days: int = 0
+    leaf_total: int = 0
+    leaf_done: int = 0
+    children: list["ChangeTaskNode"] = Field(default_factory=list)
+
+
+ChangeTaskNode.model_rebuild()
+
+
+class ChangeDetail(ChangeRead):
+    """变更单详情 = 基本信息 + 任务树。"""
+
+    tasks: list[ChangeTaskNode] = Field(default_factory=list)
+
+
+# ---- 聚合（卡片墙 / Summary / 预警 / 燃尽） --------------------------------
+
+
+class ChangeTypeCount(BaseModel):
+    change_type_id: int
+    type_name: str
+    count: int
+
+
+class TaskStateCount(BaseModel):
+    """五色任务构成的其中一格（服务端固定按 todo/soon/overdue/done/late 顺序输出，**含 0**）。
+
+    带 `label` 是为了让前端不必自己维护文案；带 `state` 是为了让前端能用
+    `TASK_STATE_META[state] ?? 兜底` 取色（门禁 P8）。
+    """
+
+    state: str
+    label: str
+    count: int
+
+
+class OverdueBucket(BaseModel):
+    """超期时长分档的其中一格（服务端固定输出 4 档，**含 0**）。
+
+    前端据此判断「≥3 档有值 → 升格为柱图，否则退化成一行文字」。
+    """
+
+    label: str
+    count: int
+
+
+
+class ChangeUrgentBrief(BaseModel):
+    """项目卡上「最紧急的那张单」一行。"""
+
+    change_id: int
+    title: str
+    owner: Optional[str] = None
+    overdue_days: int = 0
+    overdue_leaf: int = 0
+    material_pn: str = ""
+
+
+class ChangeProjectOverview(BaseModel):
+    """项目卡片墙的一行（老板视角）。
+
+    两种完成率都要（用户确认）：
+      - task_done_rate   按该项目所有叶子任务算
+      - change_done_rate 按变更单算（已完成 ÷ 未作废）
+    """
+
+    project_id: int
+    project_code: str
+    project_name: str
+    total: int = 0
+    active: int = 0
+    done: int = 0
+    voided: int = 0
+    archived: int = 0
+    """★ 未完成的待办项数（叶子任务里 is_done 为假的个数）。
+
+    口径与首页「最需要盯的待办项」一致：**已完成的事不算待办**（迟交完成也不算）。
+    项目饼图的「待办项数」口径用它 —— 本模块的「待办项」= `change_tasks` 实体，
+    不是变更单。此前该口径错写成 `total − voided − archived`（数的是"单"），
+    既与标签不符，改 total 口径后还会重复减作废导致静默错数。
+    """
+    open_tasks: int = 0
+    overdue_changes: int = 0
+    overdue_tasks: int = 0
+    near_changes: int = 0
+    near_tasks: int = 0
+    task_done_rate: float = 0.0
+    change_done_rate: float = 0.0
+    """★ 平均时间进度 / 平均偏差（首页偏差榜用）。
+
+    avg_deviation = avg_time_rate − avg_task_done_rate，> 0 表示时间跑在人前面（滞后）。
+    只统计未作废、未归档的变更单。
+    """
+    avg_time_rate: float = 0.0
+    avg_deviation: float = 0.0
+    type_counts: list[ChangeTypeCount] = Field(default_factory=list)
+    most_urgent: Optional[ChangeUrgentBrief] = None
+
+
+class ChangeSummary(BaseModel):
+    """全局统计（Dashboard 卡 5 与变更页页头共用同一口径）。"""
+
+    total: int = 0
+    active: int = 0
+    done: int = 0
+    voided: int = 0
+    archived: int = 0
+    overdue_changes: int = 0
+    overdue_tasks: int = 0
+    near_changes: int = 0
+    near_tasks: int = 0
+    project_count: int = 0
+    material_count: int = 0
+    type_count: int = 0
+    type_counts: list[ChangeTypeCount] = Field(default_factory=list)
+    """★ 以下三项供首页可视化（2026-10-06 新增）。
+
+    口径提醒：全部只数**叶子任务**、只算**未归档且未作废**的单
+    （与 overdue_tasks / near_tasks 完全同源，可直接相加校验）。
+    """
+    task_state_counts: list[TaskStateCount] = Field(default_factory=list)
+    overdue_buckets: list[OverdueBucket] = Field(default_factory=list)
+    unassigned_tasks: int = 0
+    """拖得最久的那一项超期了多少天（0 = 当前没有超期项）"""
+    max_overdue_days: int = 0
+
+
+class ChangeAlertItem(BaseModel):
+    """预警明细行（必带责任人；未指派单独标灰）。"""
+
+    level: Literal["overdue", "near", "late"]
+    task_id: int
+    task_name: str
+    task_level: int = 1
+    change_id: int
+    change_title: str
+    project_id: int
+    project_code: str = ""
+    project_name: str = ""
+    material_pn: str = ""
+    material_name: str = ""
+    owner: Optional[str] = None
+    is_unassigned: bool = False
+    plan_end: Optional[date] = None
+    days: int = 0
+
+
+class BurndownPoint(BaseModel):
+    date: date
+    plan_remaining: int
+    actual_remaining: Optional[int] = None
+
+
+class ChangeBurndown(BaseModel):
+    """燃尽数据。只依赖已录入数据，不推算、不补假点。
+
+    `step` = 取样步长（天）。1 = 逐日；7 = 跨度 > 180 天时为控体量按周取样，
+    前端据此在标题里注明「按周取样」。
+    """
+
+    total: int = 0
+    start: Optional[date] = None
+    end: Optional[date] = None
+    step: int = 1
+    points: list[BurndownPoint] = Field(default_factory=list)
+
+
+# ---- 归档 / 导入导出 -------------------------------------------------------
+
+
+class ChangeArchiveRead(BaseModel):
+    id: int
+    scope: ArchiveScope
+    project_id: int
+    project_code: str = ""
+    project_name: str = ""
+    change_id: Optional[int] = None
+    change_title: Optional[str] = None
+    archived_at: datetime
+    remark: Optional[str] = None
+
+
+class ChangeImportResult(BaseModel):
+    created_changes: int = 0
+    updated_changes: int = 0
+    created_tasks: int = 0
+    updated_tasks: int = 0
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)

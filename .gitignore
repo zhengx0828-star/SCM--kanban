@@ -33,3 +33,6 @@ runtime/
 # 临时日志/报告
 _*.log
 size_report.txt
+
+# 临时脚本与验收中间产物（CDP 截图 / dump）
+scripts/_tmp/

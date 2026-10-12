@@ -15,7 +15,18 @@ from sqlalchemy import text
 
 from .database import Base, engine
 from .migrations import run_migrations
-from .routers import bases, inventory, materials, products, projects, rules, share, suppliers, supply_relations
+from .routers import (
+    bases,
+    changes,
+    inventory,
+    materials,
+    products,
+    projects,
+    rules,
+    share,
+    suppliers,
+    supply_relations,
+)
 # 暂不写入演示数据，保留空白底表
 # from .seed import seed_materials, seed_products, seed_projects, seed_suppliers
 
@@ -63,6 +74,11 @@ app.include_router(bases.router)
 app.include_router(rules.router)
 app.include_router(share.router)
 app.include_router(inventory.router)
+# 变更管理：三个 router（变更单 / 任务 / 类型字典）。
+# 变更单 router 内部已保证字面量路由注册在 /{change_id} 之前，详见 routers/changes.py 顶部注释。
+app.include_router(changes.router)
+app.include_router(changes.task_router)
+app.include_router(changes.type_router)
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +117,24 @@ _FIELD_LABELS: dict[str, str] = {
     "doh_target": "目标覆盖天数",
     "service_z": "服务水平系数 Z",
     "excess": "过剩天数阈值",
+    # 变更管理
+    "change_type_id": "变更类型",
+    "title": "变更标题",
+    "description": "描述",
+    "owner": "责任人",
+    "parent_id": "父任务 ID",
+    "seq": "排序",
+    "is_done": "是否完成",
+    "plan_start": "计划开始",
+    "plan_end": "计划完成",
+    "scope": "归档范围",
+    "sort_order": "排序",
+    "is_active": "是否启用",
+    "text": "批量任务文本",
+    "hard": "是否物理删除",
+    "archived": "归档状态",
+    "change_id": "变更单 ID",
+    "task_id": "任务 ID",
 }
 
 # Pydantic 错误 type → 中文释义
