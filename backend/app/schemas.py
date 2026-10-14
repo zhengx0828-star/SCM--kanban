@@ -345,6 +345,17 @@ class ProjectSupplyRelationQuickCreate(BaseModel):
     capacity: Optional[list[float]] = Field(None, min_length=12, max_length=12, description="供应商产能（1-12月，供需管理模块）")
     bom_factor: Optional[float] = Field(None, ge=0, description="BOM 用量系数（1 台产品需多少个该物料）")
     remark: Optional[str] = Field(None, max_length=2000)
+    sync_master_names: bool = Field(
+        False,
+        description=(
+            "命中**已存在**的物料/供应商时，是否用本次提交的名称去覆盖全局主数据名称。"
+            "**默认 False（安全侧）**：只复用、绝不改全局主数据 —— 任何调用方漏传都不会误伤其它项目。"
+            "手动「快速新增」因为名称是用户当场亲手打的、改名是他的明确意图，才显式传 True。"
+            "★ Excel 批量导入必须保持 False：物料按 PN、供应商按 code 是全项目共用的一条，"
+            "导入时改名会连带改掉其它项目看到的名称（2026-10-14 事故：导入 EP1 把 LFP3 的 191 改成了 CCS）。"
+            "传 False 时名称不一致由前端提示，不静默处理。"
+        ),
+    )
 
 
 class ProjectSupplyRelationUpdate(BaseModel):

@@ -585,6 +585,61 @@ python scripts/_tmp/fp_check.py diff      # 退出码非 0 = 有残留
 
 ---
 
+### 坑 22：★ `Card` 自带 `overflow-hidden`，会把**下拉面板整块裁掉**
+
+2026-10-14：供需管理页的「项目 / 物料」下拉点开**只看到一个搜索框，选项列表完全不见**，
+项目和物料都选不了 → 下方图表与热力图永远出不来。用户报的是"物料供需出不来"，
+但根因跟物料、供需、热力图**一点关系都没有**。
+
+**根因**：`components/ui/card.tsx` 的 `Card` 基础类里有 `overflow-hidden`。
+下拉面板是 `absolute left-0 top-full`（向下超出卡片），于是被 `overflow:hidden` **连同命中测试一起裁掉**：
+`elementFromPoint(面板中心)` 返回的是面板**下面那张卡**（实测拿到 `SPAN 客户需求`）。
+
+**为什么 tsc / vite build / 静态检查全都抓不到**：DOM 里元素在、`getBoundingClientRect()` 也有正常尺寸，
+只是"画不出来、也点不到"。**必须真实渲染 + 命中测试**。
+
+**修法**：给那张 `Card` 补 `overflow-visible`。
+`cn()` 走 twMerge，后写的 `overflow-visible` 会覆盖基础类的 `overflow-hidden`。
+
+**规矩**：
+1. **凡是把 `MultiSelectDropdown` / 任何自研绝对定位浮层放进 `Card`、`AnalysisSection` 这类
+   带 `overflow-hidden` 的容器，必须显式加 `overflow-visible`。**
+2. 验收浮层类交互，一律用 `scripts/verify_supply_demand_page.mjs` 那套判据：
+   开面板 → `elementFromPoint` 命中测试是否落在面板内 → 再断言选项能勾选。
+   **只看截图"面板好像出来了"不够**，半截面板（只露搜索框）同样要判为失败。
+
+
+---
+
+### 坑 23：★ 项目级的写入，绝不能顺手改「全局主数据」
+
+2026-10-14 用户报障：「供应商列表导入，一开始导入 LFP3，后来导入 EP1，**LFP3 的内容自己变了**」。
+
+**现象**：LFP3 页面上的物料 `191` 从「模组侧板」变成了「CCS」。用户根本没碰 LFP3。
+
+**根因**：`routers/projects.py::quick_add_project_relation` 里写了
+`elif material.name != payload.material_name: material.name = ...`（供应商同理）。
+本意是"顺手同步一下名称"，但三层五表里 **物料按 PN、供应商按 code 是全局唯一的一条，项目只是引用** ——
+所以项目级的 Excel 导入，改一行 = 改掉所有引用它的项目。
+
+**定位手法（可复用）**：`updated_at` 时间戳就是铁证 ——
+被改的主数据 `created_at` 是旧的、`updated_at` 恰好等于导入那一刻，而同批新建的行 `created_at` 等于同一秒。
+
+**修法**：`quick-add` 增加 `sync_master_names` 开关，**默认 `False`（安全侧：漏传也不会误伤）**。
+- Excel 批量导入 → `False`：只复用、绝不改全局主数据；名称不一致由前端对照返回体提示「已沿用系统原名」。
+- 手动「快速新增」→ 显式 `True`：名称是用户当场亲手打的，属明确意图。
+  （附带发现：物料接口只有新建 / 删除、**没有改名**，所以手动快速新增是目前唯一能改物料名的入口，不能直接删掉这个能力。）
+
+**规矩**：
+1. **任何"项目级"写接口，都不允许改 L1/L2 全局主数据。** 要改主数据，就做成主数据自己的显式编辑接口。
+2. 新增跨层写逻辑时，先问一句：**这条记录还有谁在用？** 有就绝不能顺手改。
+3. 验收：`~/.workbuddy/tmp` 下那套做法 —— **复制整个 `backend/` 到临时目录跑副本**（DB 路径写死为
+   `backend/products.db`，无法用环境变量重定向），改完再核对真实库 `mtime` 未变。
+   ⚠️ 绝不要对着用户**正在运行**的真实后端点「确认导入」——那会真的再改一次数据。
+
+
+---
+
 ## 七、快速诊断清单（内网启动失败时按顺序查）
 
 | 步骤 | 命令 | 预期 |

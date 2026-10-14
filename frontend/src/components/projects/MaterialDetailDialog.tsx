@@ -5,6 +5,7 @@ import {
   Factory,
   Loader2,
   Package,
+  Plus,
   Save,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -56,6 +57,8 @@ interface MaterialDetailDialogProps {
   onClose: () => void;
   /** 在对话框内部点击供应商名/查看供应商按钮时触发（弹 SupplierDetailDialog 等）。 */
   onSupplierClick?: (supplier: { code: string; name: string }) => void;
+  /** 该物料暂无供应明细时，点「为该物料添加供应商」触发（父页打开快速新增并预填 PN）。 */
+  onAddSupplier?: (material: { pn: string; name: string }) => void;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -341,6 +344,7 @@ export function MaterialDetailDialog({
   projectId,
   onClose,
   onSupplierClick,
+  onAddSupplier,
 }: MaterialDetailDialogProps) {
   /* ----- BOM 草稿 ----- */
   const [bomDraft, setBomDraft] = useState<number | null | "">(material?.bom ?? null);
@@ -511,9 +515,20 @@ export function MaterialDetailDialog({
                 <span className="text-[10px] text-muted-foreground">蓝虚线 = 物料需求</span>
               </div>
               {material.rows.length === 0 ? (
-                <p className="rounded-md bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                  该物料暂无供应明细
-                </p>
+                <div className="flex flex-col items-start gap-2 rounded-md bg-muted/30 px-3 py-3">
+                  <p className="text-sm text-muted-foreground">该物料暂无供应明细</p>
+                  {onAddSupplier && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8"
+                      onClick={() => onAddSupplier({ pn: material.pn, name: material.name })}
+                    >
+                      <Plus className="mr-1 h-3.5 w-3.5" />
+                      为该物料添加供应商
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <MaterialChart
                   buildOption={(d) =>
@@ -543,9 +558,20 @@ export function MaterialDetailDialog({
             </div>
 
             {material.rows.length === 0 ? (
-              <p className="rounded-md bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                该物料暂无供应明细
-              </p>
+              <div className="flex flex-col items-start gap-2 rounded-md bg-muted/30 px-3 py-3">
+                <p className="text-sm text-muted-foreground">该物料暂无供应明细</p>
+                {onAddSupplier && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8"
+                    onClick={() => onAddSupplier({ pn: material.pn, name: material.name })}
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    为该物料添加供应商
+                  </Button>
+                )}
+              </div>
             ) : (
               <div className="space-y-4">
                 {material.rows.map((r) => {

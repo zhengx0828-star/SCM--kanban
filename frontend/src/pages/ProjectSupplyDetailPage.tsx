@@ -3,19 +3,22 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Boxes,
-  ChevronRight,
+  FileSpreadsheet,
   Loader2,
   Package,
+  Plus,
   Save,
-  Search,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
+import { LINE_COLORS } from "@/components/charts/DemandLineChart";
 import { MaterialDetailDialog } from "@/components/projects/MaterialDetailDialog";
+import { QuickAddRelationDialog } from "@/components/projects/QuickAddRelationDialog";
+import { DemandExcelImportDialog } from "@/components/projects/DemandExcelImportDialog";
 import { SupplierDetailDialog } from "@/components/suppliers/SupplierDetailDialog";
 import { SiteHeader } from "@/components/site/SiteHeader";
 import { SiteSidebar } from "@/components/site/SiteSidebar";
@@ -99,22 +102,14 @@ export default function ProjectSupplyDetailPage() {
     return Array.from(m.values());
   }, [relations, projectDemand]);
 
-  /* ---- 搜索过滤 ---- */
-  const [keyword, setKeyword] = useState("");
-  const [materialExpanded, setMaterialExpanded] = useState(false);
-  const filteredMaterials = useMemo(() => {
-    const q = keyword.trim().toLowerCase();
-    if (!q) return materialsByKey;
-    return materialsByKey.filter(
-      (m) => m.pn.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
-    );
-  }, [materialsByKey, keyword]);
+  /* ---- 概览：未设 BOM 的物料数（保留原来列表行的关键信息） ---- */
+  const noBomCount = useMemo(() => materialsByKey.filter((m) => m.bom == null).length, [materialsByKey]);
 
   /* ---- 弹窗：物料 dialog / 供应商 dialog ---- */
   const [openMaterialPn, setOpenMaterialPn] = useState<string | null>(null);
   const openMaterial = useMemo(
-    () => (openMaterialPn ? filteredMaterials.find((m) => m.pn === openMaterialPn) ?? null : null),
-    [openMaterialPn, filteredMaterials]
+    () => (openMaterialPn ? materialsByKey.find((m) => m.pn === openMaterialPn) ?? null : null),
+    [openMaterialPn, materialsByKey]
   );
 
   /* 用供应商列表构建 code → Supplier 索引，供点击供应商名时跳 dialog */
@@ -125,6 +120,11 @@ export default function ProjectSupplyDetailPage() {
     return m;
   }, [suppliers]);
   const [openSupplier, setOpenSupplier] = useState<Supplier | null>(null);
+
+  /* ---- 弹窗：快速新增物料-供应商 / 导入供需 Excel ---- */
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [quickAddPrefill, setQuickAddPrefill] = useState<{ pn: string; name: string }>({ pn: "", name: "" });
 
   if (!isValid) {
     return (
@@ -228,132 +228,68 @@ export default function ProjectSupplyDetailPage() {
 
               {/* 物料列表（默认折叠；有搜索关键词时自动展开） */}
               <div>
-                <div className="mb-2 flex items-center justify-between gap-3 px-1">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
                   <p className="text-xs text-muted-foreground">
                     物料列表（点击物料行，弹出窗口查看 BOM 系数、物料需求、各供应商产能）
                   </p>
-                </div>
-
-                {/* 搜索框（常驻） */}
-                <div className="relative mb-3">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={keyword}
-                    onChange={(e) => setKeyword(e.target.value)}
-                    placeholder="搜索物料 PN 或名称（如「模组」「581601」「铆钉」）"
-                    className="h-9 pl-8 pr-8"
-                  />
-                  {keyword && (
-                    <button
-                      type="button"
-                      onClick={() => setKeyword("")}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      aria-label="清除"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    <Button size="sm" onClick={() => { setQuickAddPrefill({ pn: "", name: "" }); setQuickAddOpen(true); }}>
+                      <Plus className="mr-1.5 h-4 w-4" />
+                      新增物料-供应商
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+                      <FileSpreadsheet className="mr-1.5 h-4 w-4" />
+                      导入供需 Excel
+                    </Button>
+                  </div>
                 </div>
 
                 {relationsLoading ? (
-                  <div className="space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} className="h-12" />
-                    ))}
-                  </div>
+                  <Skeleton className="h-9 w-full" />
                 ) : materialsByKey.length === 0 ? (
                   <Card>
-                    <CardContent className="flex h-24 items-center justify-center text-xs text-muted-foreground">
-                      该项目下暂无物料，请到「供应商列表」挂载供应关系
-                    </CardContent>
-                  </Card>
-                ) : filteredMaterials.length === 0 ? (
-                  <Card>
                     <CardContent className="flex h-24 flex-col items-center justify-center gap-1 text-xs text-muted-foreground">
-                      <p>没有匹配的物料</p>
-                      <p className="text-[10px]">关键词：「{keyword}」 · 共 {materialsByKey.length} 个物料</p>
+                      <p>该项目下暂无物料</p>
+                      <p className="text-[10px]">点击上方「新增物料-供应商」挂载，或用「导入供需 Excel」批量录入</p>
                     </CardContent>
                   </Card>
                 ) : (
                   <>
-                    {/* 折叠态：只显示「展开物料列表（N）」按钮；搜索关键词时自动展开 */}
-                    {(!materialExpanded && !keyword) && (
-                      <button
-                        type="button"
-                        onClick={() => setMaterialExpanded(true)}
-                        className="flex w-full items-center justify-between rounded-md border bg-card px-5 py-3 text-sm transition-colors hover:border-primary/40 hover:bg-muted/30"
-                      >
-                        <span className="flex items-center gap-2 font-medium">
-                          <Boxes className="h-4 w-4 text-muted-foreground" />
-                          展开物料列表
-                          <span className="rounded-md bg-muted/40 px-1.5 py-0.5 text-xs font-mono text-muted-foreground">
-                            {materialsByKey.length} 个物料
+                    <MultiSelectDropdown
+                      label="物料"
+                      mode="single"
+                      icon={<Boxes className="h-3.5 w-3.5 text-muted-foreground" />}
+                      options={materialsByKey.map((m, i) => ({
+                        value: m.pn,
+                        label: m.name,
+                        sublabel: m.pn,
+                        color: LINE_COLORS[i % LINE_COLORS.length],
+                        badge: (
+                          <span className="flex shrink-0 items-center gap-1">
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                              {m.rows.length} 家
+                            </span>
+                            {m.bom == null && (
+                              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+                                未设 BOM
+                              </span>
+                            )}
                           </span>
-                        </span>
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      </button>
-                    )}
-
-                    {/* 展开态：物料行 + 「收起」按钮 */}
-                    {(materialExpanded || keyword) && (
-                      <div className="space-y-2">
-                        {filteredMaterials.map((m) => {
-                          const materialDemandTotal =
-                            projectDemand && m.bom != null
-                              ? projectDemand.reduce((a, v) => a + v * (m.bom ?? 0), 0)
-                              : 0;
-                          return (
-                            <Card key={m.pn}>
-                              <button
-                                type="button"
-                                onClick={() => setOpenMaterialPn(m.pn)}
-                                className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-muted/30"
-                              >
-                                <Boxes className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-mono text-sm font-semibold">{m.pn}</span>
-                                    <span className="truncate text-xs text-muted-foreground">
-                                      {m.name}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                  <span className="rounded-md bg-muted/30 px-2 py-0.5">
-                                    {m.rows.length} 家供应商
-                                  </span>
-                                  {m.bom != null ? (
-                                    <span className="rounded-md bg-muted/30 px-2 py-0.5">
-                                      BOM ×{m.bom}
-                                    </span>
-                                  ) : (
-                                    <span className="rounded-md bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
-                                      未设 BOM
-                                    </span>
-                                  )}
-                                  {m.bom != null && projectDemand && (
-                                    <span className="rounded-md bg-primary/10 px-2 py-0.5 font-semibold text-primary">
-                                      物料需求年合计 {materialDemandTotal.toLocaleString()}
-                                    </span>
-                                  )}
-                                </div>
-                                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                              </button>
-                            </Card>
-                          );
-                        })}
-                        {/* 收起按钮（仅在非搜索状态下显示） */}
-                        {materialExpanded && !keyword && (
-                          <button
-                            type="button"
-                            onClick={() => setMaterialExpanded(false)}
-                            className="mt-1 flex w-full items-center justify-center gap-1 rounded-md border border-dashed px-4 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted/30 hover:text-foreground"
-                          >
-                            收起物料列表
-                          </button>
-                        )}
-                      </div>
-                    )}
+                        ),
+                      }))}
+                      selected={openMaterialPn ? new Set([openMaterialPn]) : new Set<string>()}
+                      onChange={(next) => {
+                        const pn = Array.from(next)[0];
+                        if (pn) setOpenMaterialPn(pn);
+                      }}
+                      placeholder="选择物料查看详情"
+                      searchPlaceholder="搜索物料 PN 或名称…"
+                    />
+                    <p className="mt-2 px-1 text-[11px] text-muted-foreground">
+                      共 {materialsByKey.length} 个物料
+                      {noBomCount > 0 && ` · ${noBomCount} 个未设 BOM`}
+                      ，选中后弹出 BOM / 需求 / 产能详情
+                    </p>
                   </>
                 )}
               </div>
@@ -377,10 +313,35 @@ export default function ProjectSupplyDetailPage() {
           if (s) setOpenSupplier(s);
           else toast.warning(`未找到供应商：${code}（请先在供应商列表维护）`);
         }}
+        onAddSupplier={({ pn, name }) => {
+          setOpenMaterialPn(null);
+          setQuickAddPrefill({ pn, name });
+          setQuickAddOpen(true);
+        }}
       />
 
       {/* 供应商详情对话框 */}
       <SupplierDetailDialog supplier={openSupplier} onClose={() => setOpenSupplier(null)} />
+
+      {/* 快速新增物料-供应商 */}
+      <QuickAddRelationDialog
+        open={quickAddOpen}
+        onOpenChange={setQuickAddOpen}
+        projectId={projectId}
+        initialPn={quickAddPrefill.pn}
+        initialMaterialName={quickAddPrefill.name}
+      />
+
+      {/* 导入供需 Excel（需求 + BOM + 产能） */}
+      {project && (
+        <DemandExcelImportDialog
+          open={importOpen}
+          onOpenChange={setImportOpen}
+          projectId={projectId}
+          projectCode={project.code}
+          projectName={project.name}
+        />
+      )}
     </div>
   );
 }

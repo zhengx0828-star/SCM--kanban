@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import * as echarts from "echarts";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
-import { RISK_META, RISK_ORDER, riskKeyOf, type Supplier, type SupplierRiskKey } from "@/types/supplier";
+import { computeSupplierPlacements } from "@/lib/supplier-map-points";
+import { RISK_META, RISK_ORDER, type Supplier, type SupplierRiskKey } from "@/types/supplier";
 
 /**
  * 中国地图（ECharts 渲染）。
@@ -18,6 +19,10 @@ import { RISK_META, RISK_ORDER, riskKeyOf, type Supplier, type SupplierRiskKey }
  * 点击海洋等区域外（无行政区名）不响应。
  *
  * 地图不展示任何省份维度的演示数据——只显示真实录入的供应商点位。
+ *
+ * 同省重叠：坐标取的是省份中心，**同省供应商坐标完全相同**，散点会重合只显示一个。
+ * 处理方式（见 @/lib/supplier-map-points）：
+ *   2~8 家同坐标 → 确定性环形散开；> 8 家 → 聚合成计数气泡（显示家数）。
  *
  * 刷新机制：地图实例只初始化一次（跟随主题重建），suppliers 变化时仅增量更新散点系列，
  * 避免整图重建带来的竞态，保证录入后点位即时刷新。
@@ -49,29 +54,40 @@ interface SupplierScatterItem {
   supply_material: string;
 }
 
+/** 计数气泡数据（同坐标供应商过多时聚合展示） */
+interface ClusterScatterItem {
+  name: string;
+  value: [number, number];
+  count: number;
+  city: string;
+}
+
 /** 构建散点系列（带 id，供增量 setOption 按 id 合并更新）。
- * 按风险等级分组着色：红/黄/绿/灰（未评估），未评估不冒充红黄绿。 */
+ *
+ * 坐标由 `computeSupplierPlacements` 统一计算：单点原样、同坐标 2~8 家环形散开、
+ * > 8 家聚合成计数气泡。这里只负责按风险等级分组着色：
+ * 红/黄/绿/灰（未评估），未评估不冒充红黄绿。
+ */
 function buildScatterSeries(suppliers: Supplier[]): echarts.SeriesOption[] {
+  const { points, clusters } = computeSupplierPlacements(suppliers);
+
   const scatterByRisk: Record<SupplierRiskKey, SupplierScatterItem[]> = {
     red: [],
     yellow: [],
     green: [],
     none: [],
   };
-  for (const s of suppliers) {
-    // 底表供应商可能暂无坐标（地图字段未补全），不上地图
-    if (s.longitude == null || s.latitude == null) continue;
-    const key = riskKeyOf(s.risk_level);
-    scatterByRisk[key].push({
-      name: s.name,
-      value: [s.longitude, s.latitude],
-      supplierId: s.id,
-      city: s.city ?? "-",
-      supply_material: s.supply_material ?? "-",
+  for (const p of points) {
+    scatterByRisk[p.risk].push({
+      name: p.name,
+      value: [p.lng, p.lat],
+      supplierId: p.supplierId,
+      city: p.city,
+      supply_material: p.supply_material,
     });
   }
 
-  return RISK_ORDER.map((risk) => {
+  const series = RISK_ORDER.map((risk) => {
     const riskColor = RISK_META[risk].color;
     return {
       id: `scatter-${risk}`,
@@ -105,6 +121,45 @@ function buildScatterSeries(suppliers: Supplier[]): echarts.SeriesOption[] {
       })),
     } as echarts.SeriesOption;
   });
+
+  // 计数气泡：同坐标供应商超过阈值时聚合，显示家数，按组内最严重风险着色
+  if (clusters.length > 0) {
+    series.push({
+      id: "scatter-cluster",
+      name: "多供应商点位",
+      type: "scatter",
+      coordinateSystem: "geo",
+      zlevel: 5,
+      symbolSize: (_value: unknown, params: { data?: ClusterScatterItem }) => {
+        const n = params.data?.count ?? 1;
+        return Math.min(26 + n * 1.5, 58);
+      },
+      label: {
+        show: true,
+        formatter: (params: { data?: ClusterScatterItem }) => String(params.data?.count ?? ""),
+        color: "#ffffff",
+        fontSize: 12,
+        fontWeight: 500,
+      },
+      itemStyle: {
+        color: "#64748b",
+        borderColor: "#0f172a",
+        borderWidth: 2,
+        shadowBlur: 18,
+        shadowColor: "rgba(15,23,42,0.45)",
+      },
+      emphasis: { scale: 1.2 },
+      data: clusters.map((c) => ({
+        name: `${c.count} 家供应商`,
+        value: [c.lng, c.lat],
+        count: c.count,
+        city: c.city,
+        itemStyle: { color: RISK_META[c.risk].color, borderColor: "#0f172a", borderWidth: 2 },
+      })),
+    } as unknown as echarts.SeriesOption);
+  }
+
+  return series;
 }
 
 /** 商务风地图配色（低饱和灰蓝，背景用于突出供应商点位） */
@@ -132,11 +187,20 @@ function buildOption(dark: boolean, suppliers: Supplier[]): echarts.EChartsOptio
       backgroundColor: isDark ? "#1e293b" : "#ffffff",
       borderColor: isDark ? "#334155" : "#e2e8f0",
       textStyle: { color: textColor, fontSize: 12 },
-      // 仅响应散点：供应商详情
+      // 仅响应散点：供应商详情 / 聚合气泡
       formatter: (params: unknown) => {
         const p = params as { seriesType?: string; name?: string; data?: unknown };
         if (p.seriesType !== "scatter") return "";
-        const d = p.data as { name?: string; city?: string; supply_material?: string } | undefined;
+        const d = p.data as
+          | { name?: string; city?: string; supply_material?: string; count?: number }
+          | undefined;
+        // 聚合气泡：展示省份 + 家数
+        if (d?.count != null) {
+          return (
+            `<div style="font-weight:600;margin-bottom:4px">${d.city ?? "-"}</div>` +
+            `<div>${d.count} 家供应商（点位已聚合）</div>`
+          );
+        }
         return (
           `<div style="font-weight:600;margin-bottom:4px">${d?.name ?? p.name ?? "-"}</div>` +
           `<div>城市：${d?.city ?? "-"}</div>` +
@@ -298,13 +362,15 @@ export function ChinaMap({ className, suppliers = [], onSupplierClick, pickMode 
     };
   }, [dark]);
 
-  /* 供应商数据变化：地图就绪后仅增量更新散点系列（按 id 合并），点位即时刷新 */
+  /* 供应商数据变化：地图就绪后仅增量更新散点系列（按 id 合并），点位即时刷新。
+     replaceMerge 保证系列与最新数据严格一致 —— 聚合气泡是动态增减的系列，
+     纯 merge 会让消失的气泡残留（切换项目切片时尤其明显）。 */
   useEffect(() => {
     const el = ref.current;
     if (!el || !geoReadyRef.current) return;
     const chart = echarts.getInstanceByDom(el);
     if (!chart) return;
-    chart.setOption({ series: buildScatterSeries(suppliers) });
+    chart.setOption({ series: buildScatterSeries(suppliers) }, { replaceMerge: ["series"] });
   }, [suppliers]);
 
   return <div ref={ref} className={cn("h-full w-full", className)} />;

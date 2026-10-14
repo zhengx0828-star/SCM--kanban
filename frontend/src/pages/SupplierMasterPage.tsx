@@ -44,7 +44,6 @@ import {
   useDeleteSupplyRelation,
   useSupplyRelationOptions,
   useSupplyRelationProjects,
-  useSupplyRelations,
 } from "@/hooks/use-supply-relations";
 import { useMaterials, useCreateMaterial, useDeleteMaterial } from "@/hooks/use-materials";
 import { useSuppliers, useCreateSupplier, useDeleteSupplier } from "@/hooks/use-suppliers";
@@ -62,7 +61,7 @@ import type { SupplyRelation } from "@/types/supplyRelation";
 import { PROJECT_STATUS_META, type Project, type ProjectSupplyRelation } from "@/types/project";
 
 const MAT_PAGE_SIZE = 8;
-const REL_PAGE_SIZE = 10;
+const SUP_PAGE_SIZE = 10;
 const DETAIL_PAGE_SIZE = 10;
 
 /* ---------- 新增物料弹窗（仅 PN + 物料名称） ---------- */
@@ -383,6 +382,9 @@ function ProjectDetailView({
         material_name: q.materialName.trim(),
         supplier_name: q.supplierName.trim(),
         supplier_code: q.supplierCode.trim(),
+        // ★ 手动录入：名称是用户当场亲手打的，属于明确意图 → 允许同步覆盖全局主数据名称。
+        //   Excel 批量导入走的是 False，绝不改名（见 ExcelImportDialog）。
+        sync_master_names: true,
       },
       {
         onSuccess: () => {
@@ -475,6 +477,9 @@ function ProjectDetailView({
           <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
             <p className="mb-2 text-xs font-medium text-primary">
               快速新增：填写四项即可，系统自动创建/复用主数据并挂载到本项目
+              <span className="ml-1 font-normal text-muted-foreground">
+                （已存在的物料 / 供应商，名称会按你填写的同步更新，会影响所有引用它的项目）
+              </span>
             </p>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-1">
@@ -595,9 +600,9 @@ function ProjectDetailView({
 
 /* ---------- 供应商列表页（项目 / 物料 / 供应商 / 供应关系） ---------- */
 export default function SupplierMasterPage() {
-  const [tab, setTab] = useState<"projects" | "materials" | "suppliers" | "relations">("projects");
+  const [tab, setTab] = useState<"projects" | "materials" | "suppliers">("projects");
 
-  // 物料 Tab（主从）状态
+  // 物料 Tab（主从：PN 列表 → 该 PN 的供应商）
   const [matPage, setMatPage] = useState(1);
   const [matKeyword, setMatKeyword] = useState("");
   const [matSearchInput, setMatSearchInput] = useState("");
@@ -606,14 +611,15 @@ export default function SupplierMasterPage() {
   const [addSupplierOpen, setAddSupplierOpen] = useState(false);
   const [deleteMaterial, setDeleteMaterial] = useState<Material | null>(null);
 
-  // 供应商 Tab 状态
+  // 供应商 Tab（主从：供应商列表 → 该供应商供应的物料）
+  const [supPage, setSupPage] = useState(1);
+  const [supKeyword, setSupKeyword] = useState("");
+  const [supSearchInput, setSupSearchInput] = useState("");
+  const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null);
   const [supplierFormOpen, setSupplierFormOpen] = useState(false);
   const [deleteSupplier, setDeleteSupplier] = useState<{ id: number; name: string; code: string } | null>(null);
 
-  // 供应关系 Tab 状态
-  const [relKeyword, setRelKeyword] = useState("");
-  const [relSearchInput, setRelSearchInput] = useState("");
-  const [relPage, setRelPage] = useState(1);
+  // 供应关系操作（供两个主从视图共用：查看引用项目 / 解除关系）
   const [projectsRelation, setProjectsRelation] = useState<SupplyRelation | null>(null);
   const [relationFormOpen, setRelationFormOpen] = useState(false);
   const [deleteRelation, setDeleteRelation] = useState<SupplyRelation | null>(null);
@@ -633,7 +639,6 @@ export default function SupplierMasterPage() {
   const { data: matList, isLoading: matLoading } = useMaterials({ page: matPage, page_size: MAT_PAGE_SIZE, keyword: matKeyword || undefined });
   const { data: allSuppliers = [], isLoading: allSuppliersLoading } = useSuppliers();
   const { data: allRelations = [], isLoading: relOptionsLoading } = useSupplyRelationOptions();
-  const { data: relList, isLoading: relLoading } = useSupplyRelations({ page: relPage, page_size: REL_PAGE_SIZE, keyword: relKeyword || undefined });
   const { data: projectList, isLoading: projectsLoading } = useProjects({ page: 1, page_size: 100 });
   const { data: detailRelations = [], isLoading: detailLoading } = useProjectRelations(selectedProjectId);
 
@@ -656,6 +661,55 @@ export default function SupplierMasterPage() {
         : allRelations.filter((r) => r.material_id === selectedMaterialId),
     [allRelations, selectedMaterialId]
   );
+  /** 该物料下的供应商家数（独供 = 1 家，多源 ≥ 2 家） */
+  const materialSupplierCount = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const r of allRelations) {
+      map.set(r.material_id, (map.get(r.material_id) ?? 0) + 1);
+    }
+    return map;
+  }, [allRelations]);
+
+  /* ---------- 供应商 Tab：关键词过滤 + 前端分页 ---------- */
+  const filteredSuppliers = useMemo(() => {
+    const kw = supKeyword.trim().toLowerCase();
+    if (!kw) return allSuppliers;
+    return allSuppliers.filter(
+      (s) =>
+        s.name.toLowerCase().includes(kw) ||
+        s.code.toLowerCase().includes(kw) ||
+        (s.city ?? "").toLowerCase().includes(kw)
+    );
+  }, [allSuppliers, supKeyword]);
+
+  const supTotalPages = Math.max(1, Math.ceil(filteredSuppliers.length / SUP_PAGE_SIZE));
+  const supPageItems = useMemo(
+    () => filteredSuppliers.slice((supPage - 1) * SUP_PAGE_SIZE, supPage * SUP_PAGE_SIZE),
+    [filteredSuppliers, supPage]
+  );
+
+  const selectedSupplier = allSuppliers.find((s) => s.id === selectedSupplierId) ?? null;
+  /** 该供应商供应的物料（来自供应关系，去重） */
+  const supplierMaterials = useMemo(() => {
+    if (selectedSupplierId == null) return [];
+    const seen = new Set<number>();
+    const out: SupplyRelation[] = [];
+    for (const r of allRelations) {
+      if (r.supplier_id !== selectedSupplierId) continue;
+      if (seen.has(r.material_id)) continue;
+      seen.add(r.material_id);
+      out.push(r);
+    }
+    return out;
+  }, [allRelations, selectedSupplierId]);
+  /** 每个供应商供应的物料数（列表徽标用） */
+  const supplierMaterialCount = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const r of allRelations) {
+      map.set(r.supplier_id, (map.get(r.supplier_id) ?? 0) + 1);
+    }
+    return map;
+  }, [allRelations]);
 
   const allProjects = useMemo(() => {
     const kw = projKeyword.trim().toLowerCase();
@@ -679,8 +733,8 @@ export default function SupplierMasterPage() {
 
   const handleRelSearch = (e: ChangeEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setRelKeyword(relSearchInput.trim());
-    setRelPage(1);
+    setSupKeyword(supSearchInput.trim());
+    setSupPage(1);
   };
 
   const handleDeleteMaterial = () => {
@@ -777,12 +831,6 @@ export default function SupplierMasterPage() {
           录入供应商
         </Button>
       )}
-      {tab === "relations" && (
-        <Button onClick={() => setRelationFormOpen(true)}>
-          <Link2 className="mr-1.5 h-4 w-4" />
-          新增供应关系
-        </Button>
-      )}
       {tab === "projects" && (
         <Button onClick={() => { setEditingProject(null); setProjectFormOpen(true); }}>
           <Plus className="mr-1.5 h-4 w-4" />
@@ -824,9 +872,8 @@ export default function SupplierMasterPage() {
               {(
                 [
                   { key: "projects", label: "项目", icon: <FolderKanban className="h-4 w-4" /> },
-                  { key: "materials", label: "物料", icon: <Package className="h-4 w-4" /> },
+                  { key: "materials", label: "物料PN", icon: <Package className="h-4 w-4" /> },
                   { key: "suppliers", label: `供应商（${allSuppliers.length}）`, icon: <UserPlus className="h-4 w-4" /> },
-                  { key: "relations", label: "供应关系", icon: <Link2 className="h-4 w-4" /> },
                 ] as const
               ).map((t) => (
                 <button
@@ -894,7 +941,15 @@ export default function SupplierMasterPage() {
                                 <p className="truncate text-xs text-muted-foreground">{m.name}</p>
                               </div>
                               <div className="flex shrink-0 items-center gap-1.5">
-                                <Badge variant="secondary" className="font-normal">{m.supplier_count} 家</Badge>
+                                {(materialSupplierCount.get(m.id) ?? m.supplier_count) === 1 ? (
+                                  <Badge variant="outline" className="border-amber-300 font-normal text-amber-700 dark:border-amber-700 dark:text-amber-400">
+                                    独供
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="secondary" className="font-normal">
+                                    {materialSupplierCount.get(m.id) ?? m.supplier_count} 家
+                                  </Badge>
+                                )}
                                 <button
                                   type="button"
                                   aria-label="删除物料"
@@ -939,7 +994,18 @@ export default function SupplierMasterPage() {
                         <>
                           <div className="flex items-center justify-between gap-2">
                             <div className="min-w-0">
-                              <h3 className="font-mono text-sm font-semibold">{selectedMaterial?.pn ?? "物料"}</h3>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-mono text-sm font-semibold">{selectedMaterial?.pn ?? "物料"}</h3>
+                                {materialSuppliers.length === 1 ? (
+                                  <Badge variant="outline" className="border-amber-300 font-normal text-amber-700 dark:border-amber-700 dark:text-amber-400">
+                                    独供
+                                  </Badge>
+                                ) : materialSuppliers.length > 1 ? (
+                                  <Badge variant="secondary" className="font-normal">
+                                    多源 · {materialSuppliers.length} 家
+                                  </Badge>
+                                ) : null}
+                              </div>
                               <p className="truncate text-xs text-muted-foreground">{selectedMaterial?.name}</p>
                             </div>
                             <Button size="sm" onClick={() => setAddSupplierOpen(true)}>
@@ -1008,136 +1074,173 @@ export default function SupplierMasterPage() {
                 </div>
               )}
 
-              {/* Tab 2：供应商（仅名称 + 代码） */}
+              {/* Tab 2：供应商（主从：左供应商列表 → 右该供应商供应的物料） */}
               {tab === "suppliers" && (
-                <Card>
-                  <CardContent className="p-4">
-                    <p className="mb-3 text-xs text-muted-foreground">
-                      供应商主数据：仅供应商名称 + 供应商代码；与物料的组合关系见「供应关系」Tab。
-                    </p>
-                    {allSuppliersLoading ? (
-                      <div className="space-y-2">
-                        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
-                      </div>
-                    ) : allSuppliers.length === 0 ? (
-                      <p className="py-12 text-center text-sm text-muted-foreground">暂无供应商，点击右上角「录入供应商」</p>
-                    ) : (
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b text-left text-xs text-muted-foreground">
-                            <th className="py-2 pr-3 font-normal">供应商名称</th>
-                            <th className="py-2 pr-3 font-normal">供应商代码</th>
-                            <th className="py-2 text-right font-normal">操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {allSuppliers.map((s) => (
-                            <tr key={s.id} className="border-b last:border-0 hover:bg-muted/40">
-                              <td className="py-2.5 pr-3 font-medium">{s.name}</td>
-                              <td className="py-2.5 pr-3 font-mono text-xs">{s.code}</td>
-                              <td className="py-2.5 text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-muted-foreground hover:text-red-500"
-                                  onClick={() => setDeleteSupplier({ id: s.id, name: s.name, code: s.code })}
+                <div className="grid gap-6 lg:grid-cols-[380px_minmax(0,1fr)]">
+                  {/* 左：供应商列表 */}
+                  <Card className="h-fit">
+                    <CardContent className="p-4">
+                      <form onSubmit={handleRelSearch} className="relative">
+                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={supSearchInput}
+                          onChange={(e) => setSupSearchInput(e.target.value)}
+                          placeholder="搜索 供应商名称 / 代码 / 城市…"
+                          className="pl-9"
+                        />
+                      </form>
+
+                      <div className="mt-3 space-y-1">
+                        {allSuppliersLoading ? (
+                          Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)
+                        ) : filteredSuppliers.length === 0 ? (
+                          <p className="py-8 text-center text-sm text-muted-foreground">
+                            {supKeyword ? "没有匹配的供应商" : "暂无供应商，点击右上角「录入供应商」"}
+                          </p>
+                        ) : (
+                          supPageItems.map((s) => (
+                            <div
+                              key={s.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setSelectedSupplierId(s.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setSelectedSupplierId(s.id);
+                                }
+                              }}
+                              className={cn(
+                                "flex w-full cursor-pointer items-center justify-between rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                                selectedSupplierId === s.id
+                                  ? "border-primary/40 bg-primary/5"
+                                  : "border-transparent hover:bg-accent"
+                              )}
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium">{s.name}</p>
+                                <p className="font-mono text-xs text-muted-foreground">{s.code}</p>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <Badge variant="secondary" className="font-normal">
+                                  {supplierMaterialCount.get(s.id) ?? 0} 个物料
+                                </Badge>
+                                <button
+                                  type="button"
+                                  aria-label="删除供应商"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeleteSupplier({ id: s.id, name: s.name, code: s.code });
+                                  }}
+                                  className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/50"
                                 >
-                                  <Trash2 className="mr-1 h-3.5 w-3.5" />
-                                  删除
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Tab 3：供应关系（四元组主数据） */}
-              {tab === "relations" && (
-                <Card>
-                  <CardContent className="p-4">
-                    <form onSubmit={handleRelSearch} className="relative">
-                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        value={relSearchInput}
-                        onChange={(e) => setRelSearchInput(e.target.value)}
-                        placeholder="搜索 物料PN / 物料名称 / 供应商名称 / 供应商代码…"
-                        className="pl-9"
-                      />
-                    </form>
-
-                    <div className="mt-4 overflow-x-auto">
-                      {relLoading ? (
-                        <div className="space-y-2">
-                          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
-                        </div>
-                      ) : (relList?.items ?? []).length === 0 ? (
-                        <p className="py-12 text-center text-sm text-muted-foreground">
-                          暂无供应关系，点击右上角「新增供应关系」
-                        </p>
-                      ) : (
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b text-left text-xs text-muted-foreground">
-                              <th className="py-2 pr-3 font-normal">供应商名称</th>
-                              <th className="py-2 pr-3 font-normal">供应商代码</th>
-                              <th className="py-2 pr-3 font-normal">使用项目</th>
-                              <th className="py-2 text-right font-normal">操作</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(relList?.items ?? []).map((r) => (
-                              <tr key={r.id} className="border-b last:border-0 hover:bg-muted/40">
-                                <td className="py-2.5 pr-3 font-medium">{r.supplier_name}</td>
-                                <td className="py-2.5 pr-3 font-mono text-xs">{r.supplier_code}</td>
-                                <td className="py-2.5 pr-3">
-                                  <button
-                                    type="button"
-                                    onClick={() => setProjectsRelation(r)}
-                                    className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-accent"
-                                    title="点击查看引用的项目"
-                                  >
-                                    <FolderKanban className="h-3 w-3" />
-                                    {r.project_count} 个项目
-                                  </button>
-                                </td>
-                                <td className="py-2.5 text-right">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="text-muted-foreground hover:text-red-500"
-                                    disabled={deleteRelationMutation.isPending}
-                                    onClick={() => setDeleteRelation(r)}
-                                  >
-                                    <Trash2 className="mr-1 h-3.5 w-3.5" />
-                                    删除
-                                  </Button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-
-                    {relList && relList.total_pages > 1 && (
-                      <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                        <Button variant="outline" size="sm" disabled={relPage <= 1} onClick={() => setRelPage((p) => p - 1)}>
-                          上一页
-                        </Button>
-                        <span>共 {relList.total} 条 · {relPage} / {relList.total_pages}</span>
-                        <Button variant="outline" size="sm" disabled={relPage >= relList.total_pages} onClick={() => setRelPage((p) => p + 1)}>
-                          下一页
-                        </Button>
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
 
+                      {supTotalPages > 1 && (
+                        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                          <Button variant="outline" size="sm" disabled={supPage <= 1} onClick={() => setSupPage((p) => p - 1)}>
+                            上一页
+                          </Button>
+                          <span>{supPage} / {supTotalPages}（共 {filteredSuppliers.length} 家）</span>
+                          <Button variant="outline" size="sm" disabled={supPage >= supTotalPages} onClick={() => setSupPage((p) => p + 1)}>
+                            下一页
+                          </Button>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* 右：该供应商供应的物料 */}
+                  <Card className="h-fit">
+                    <CardContent className="p-4">
+                      {selectedSupplierId == null ? (
+                        <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
+                          <UserPlus className="h-8 w-8 text-muted-foreground/40" />
+                          <p className="text-sm font-medium text-muted-foreground">请选择左侧供应商</p>
+                          <p className="text-xs text-muted-foreground/70">查看该供应商供应的所有物料（PN）</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <h3 className="truncate text-sm font-semibold">{selectedSupplier?.name ?? "供应商"}</h3>
+                              <p className="font-mono text-xs text-muted-foreground">{selectedSupplier?.code}</p>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setRelationFormOpen(true)}
+                            >
+                              <Link2 className="mr-1.5 h-4 w-4" />
+                              为该供应商新增供应关系
+                            </Button>
+                          </div>
+
+                          <div className="mt-4 overflow-x-auto">
+                            {relOptionsLoading ? (
+                              <div className="space-y-2">
+                                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+                              </div>
+                            ) : supplierMaterials.length === 0 ? (
+                              <p className="py-10 text-center text-sm text-muted-foreground">
+                                该供应商暂无供应物料，点击「为该供应商新增供应关系」
+                              </p>
+                            ) : (
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="border-b text-left text-xs text-muted-foreground">
+                                    <th className="py-2 pr-3 font-normal">物料 PN</th>
+                                    <th className="py-2 pr-3 font-normal">物料名称</th>
+                                    <th className="py-2 pr-3 font-normal">使用项目</th>
+                                    <th className="py-2 text-right font-normal">操作</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {supplierMaterials.map((r) => (
+                                    <tr key={r.id} className="border-b last:border-0 hover:bg-muted/40">
+                                      <td className="py-2.5 pr-3 font-mono text-xs font-medium">{r.pn}</td>
+                                      <td className="py-2.5 pr-3">{r.material_name}</td>
+                                      <td className="py-2.5 pr-3">
+                                        <button
+                                          type="button"
+                                          onClick={() => setProjectsRelation(r)}
+                                          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-accent"
+                                          title="点击查看引用的项目"
+                                        >
+                                          <FolderKanban className="h-3 w-3" />
+                                          {r.project_count} 个项目
+                                        </button>
+                                      </td>
+                                      <td className="py-2.5 text-right">
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="text-muted-foreground hover:text-red-500"
+                                          disabled={deleteRelationMutation.isPending}
+                                          onClick={() => setDeleteRelation(r)}
+                                        >
+                                          <Link2Off className="mr-1 h-3.5 w-3.5" />
+                                          解除
+                                        </Button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
               {/* Tab 4：项目（列表 → 详情） */}
               {tab === "projects" && (
                 selectedProject != null ? (

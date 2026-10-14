@@ -2,7 +2,7 @@
 
 - GET    /api/materials      分页查询物料（keyword 模糊搜索 PN/名称/分类）
 - POST   /api/materials      新增物料
-- DELETE /api/materials/{id} 删除物料（级联删除供应关系与项目明细）
+- DELETE /api/materials/{id} 删除物料（仅当无人引用；被引用时 409 拒绝）
 """
 
 from typing import Optional
@@ -12,7 +12,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Material, SupplyRelation
+from ..models import Change, InventoryPlan, Material, SupplyRelation
 from ..schemas import MaterialCreate, MaterialList, MaterialRead
 
 router = APIRouter(prefix="/api/materials", tags=["Materials"])
@@ -93,5 +93,33 @@ def create_material(payload: MaterialCreate, db: Session = Depends(get_db)) -> M
 @router.delete("/{material_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除物料")
 def delete_material(material_id: int, db: Session = Depends(get_db)) -> None:
     material = _get_material(db, material_id)
-    db.delete(material)  # 级联删除供应关系与项目明细
+    # 被引用时不允许删除：materials 被 supply_relations / inventory_plans / changes 以
+    # ON DELETE CASCADE 引用，直接 db.delete 会**静默连锁删除**供应关系、项目明细、份额记录、
+    # 库存档案与变更单（实测：删 1 个物料 → 库存 12→10、份额 29→26，无任何提示）。
+    # 与 delete_supplier / delete_base 口径一致：有引用就 409 拦下，让用户先解除引用。
+    rels = db.execute(
+        select(func.count()).select_from(SupplyRelation).where(SupplyRelation.material_id == material_id)
+    ).scalar_one()
+    if rels:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"物料「{material.pn}」仍有 {rels} 条供应关系，请先解除供应关系",
+        )
+    plans = db.execute(
+        select(func.count()).select_from(InventoryPlan).where(InventoryPlan.material_id == material_id)
+    ).scalar_one()
+    if plans:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"物料「{material.pn}」仍被 {plans} 条库存档案引用，请先删除这些库存档案",
+        )
+    changes = db.execute(
+        select(func.count()).select_from(Change).where(Change.material_id == material_id)
+    ).scalar_one()
+    if changes:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"物料「{material.pn}」仍被 {changes} 张变更单引用，请先处理这些变更单",
+        )
+    db.delete(material)
     db.commit()

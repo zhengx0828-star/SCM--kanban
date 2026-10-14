@@ -70,7 +70,12 @@ export function ExcelImportDialog({
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<{ success: number; failed: Array<{ row: number; pn: string; error: string }> } | null>(null);
+  const [result, setResult] = useState<{
+    success: number;
+    failed: Array<{ row: number; pn: string; error: string }>;
+    /** 系统里已存在且名称不一致 → 沿用系统原名（不改全局主数据），这里如实告知 */
+    nameKept: Array<{ row: number; pn: string; text: string }>;
+  } | null>(null);
 
   const reset = () => {
     setFileName("");
@@ -114,6 +119,7 @@ export function ExcelImportDialog({
     setImporting(true);
     setResult(null);
     const failed: Array<{ row: number; pn: string; error: string }> = [];
+    const nameKept: Array<{ row: number; pn: string; text: string }> = [];
     let success = 0;
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
@@ -122,21 +128,39 @@ export function ExcelImportDialog({
         continue;
       }
       try {
-        await quickAddMutation.mutateAsync({
+        const res = await quickAddMutation.mutateAsync({
           pn: r.pn,
           material_name: r.material_name,
           supplier_name: r.supplier_name,
           supplier_code: r.supplier_code,
+          // ★ 批量导入**绝不改全局主数据名称**：物料按 PN、供应商按 code 是全项目共用的一条，
+          //   改名会连带改掉其它项目页面上的显示（2026-10-14 事故：导入 EP1 把 LFP3 的 191 改成了 CCS）。
+          sync_master_names: false,
         });
         success++;
+        // 服务端沿用原名 → 如实提示，避免用户以为文件里的名字生效了
+        const diff: string[] = [];
+        if (res.material_name !== r.material_name) {
+          diff.push(`物料 ${r.pn} 系统里已叫「${res.material_name}」`);
+        }
+        if (res.supplier_name !== r.supplier_name) {
+          diff.push(`供应商 ${r.supplier_code} 系统里已叫「${res.supplier_name}」`);
+        }
+        if (diff.length > 0) {
+          nameKept.push({ row: i + 2, pn: r.pn, text: `${diff.join("；")}，已沿用系统原名` });
+        }
       } catch (err) {
         failed.push({ row: i + 2, pn: r.pn, error: getApiErrorMessage(err) });
       }
     }
     setImporting(false);
-    setResult({ success, failed });
+    setResult({ success, failed, nameKept });
     if (success > 0 && failed.length === 0) {
-      toast.success(`导入完成：成功 ${success} 条`);
+      toast.success(
+        nameKept.length > 0
+          ? `导入完成：成功 ${success} 条（${nameKept.length} 条沿用了系统原有名称）`
+          : `导入完成：成功 ${success} 条`
+      );
     } else if (success > 0) {
       toast.warning(`部分成功：成功 ${success}，失败 ${failed.length}`);
     } else {
@@ -157,6 +181,8 @@ export function ExcelImportDialog({
           <DialogTitle>导入 Excel</DialogTitle>
           <DialogDescription>
             将「{projectName}」的批量明细从 .xlsx / .xls 导入。文件列约定：<b>PN · 物料名称 · 供应商名称 · 供应商代码</b>（首行表头），其他列会被忽略。
+            <br />
+            已存在的物料 / 供应商只会被<b>挂载到本项目</b>，<b>不会改动它们的名称</b>（主数据为所有项目共用，改名会影响其它项目）。
           </DialogDescription>
         </DialogHeader>
 
@@ -232,7 +258,25 @@ export function ExcelImportDialog({
                 {result.failed.length > 0 && (
                   <span className="ml-2 text-red-600 dark:text-red-400">失败 {result.failed.length} 条</span>
                 )}
+                {result.nameKept.length > 0 && (
+                  <span className="ml-2 text-amber-600 dark:text-amber-400">
+                    沿用原名 {result.nameKept.length} 条
+                  </span>
+                )}
               </p>
+              {result.nameKept.length > 0 && (
+                <div className="mt-2 max-h-32 space-y-1 overflow-y-auto rounded border bg-muted/30 p-2 text-xs">
+                  {result.nameKept.map((w, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="shrink-0 text-muted-foreground">第 {w.row} 行{w.pn ? `（${w.pn}）` : ""}：</span>
+                      <span className="text-amber-700 dark:text-amber-400">{w.text}</span>
+                    </div>
+                  ))}
+                  <p className="pt-1 text-[11px] text-muted-foreground">
+                    导入不会改动其它项目共用的主数据名称；确需改名请到「物料 / 供应商」Tab 手动修改。
+                  </p>
+                </div>
+              )}
               {result.failed.length > 0 && (
                 <div className="mt-2 max-h-32 space-y-1 overflow-y-auto rounded border bg-muted/30 p-2 text-xs">
                   {result.failed.map((f, i) => (

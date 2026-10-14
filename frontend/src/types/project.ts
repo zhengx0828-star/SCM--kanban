@@ -108,6 +108,12 @@ export interface ProjectSupplyRelationQuickCreateInput {
   demand?: number[] | null;
   capacity?: number[] | null;
   remark?: string | null;
+  /**
+   * 命中**已存在**的物料/供应商时，是否用本次名称覆盖全局主数据名称。
+   * ★ Excel 批量导入必须传 `false`：物料按 PN / 供应商按 code 是全项目共用的一条，
+   *   导入时改名会连带改掉其它项目看到的名称（默认 `true` 只给手动快速录入用）。
+   */
+  sync_master_names?: boolean;
 }
 
 /** 批量维护某项目的客户需求（1-12月，同步到该项目下所有供应明细；项目级数据） */

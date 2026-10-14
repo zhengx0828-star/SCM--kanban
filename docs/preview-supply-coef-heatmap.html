@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>供需管理 · 供应系数热力图（真实数据静态预览）</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f6f7f9;
+    --fg: #0f172a;
+    --fg-muted: #64748b;
+    --border: #e5e7eb;
+    --cell-red: #f09595;   --cell-red-fg: #501313;
+    --cell-amber: #fac775; --cell-amber-fg: #412402;
+    --cell-green: #c0dd97; --cell-green-fg: #27500a;
+    --cell-none: #e8e8e6;  --cell-none-fg: #888780;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 48px;
+    background: var(--bg-soft); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--fg-muted); font-size: 13px; margin: 0 0 16px; }
+  .note {
+    background: #eef4ff; border: 1px solid #cddffb; color: #1e3a8a;
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 18px;
+  }
+  .card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 14px; }
+  .card-head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .card-head h3 { font-size: 14px; font-weight: 600; margin: 0; flex: 1; min-width: 120px; }
+  .card-head .meta { font-size: 12px; color: var(--fg-muted); }
+  .card-body { padding: 18px; }
+  .dd { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cddffb; border-radius: 8px; padding: 5px 12px; font-size: 12px; background: #fff; margin-right: 10px; }
+  .dd b { font-weight: 500; color: var(--fg-muted); }
+  .hint { font-size: 12px; color: var(--fg-muted); margin-top: 8px; }
+  .chart-ph { height: 150px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-soft);
+              display: flex; align-items: center; justify-content: center; color: var(--fg-muted); font-size: 12px; }
+  .hm { margin-top: 16px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .hm-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .hm-head h4 { font-size: 13px; font-weight: 600; margin: 0; }
+  .hm-head p { font-size: 11px; color: var(--fg-muted); margin: 2px 0 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--fg-muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+  .hm-scroll { overflow-x: auto; padding: 14px; }
+  .grid { display: grid; gap: 3px; align-items: center; width: max-content; grid-template-columns: 200px repeat(12, 34px); }
+  .gh { font-size: 11px; color: var(--fg-muted); text-align: center; font-variant-numeric: tabular-nums; }
+  .gl { font-size: 11px; color: var(--fg-muted); }
+  .pn { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.25; }
+  .mname { font-size: 11px; line-height: 1.25; color: var(--fg-muted); }
+  .cell { height: 34px; border-radius: 3px; display: flex; align-items: center; justify-content: center;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .c-red { background: var(--cell-red); color: var(--cell-red-fg); }
+  .c-amber { background: var(--cell-amber); color: var(--cell-amber-fg); }
+  .c-green { background: var(--cell-green); color: var(--cell-green-fg); }
+  .c-none { background: var(--cell-none); color: var(--cell-none-fg); }
+  .foot { font-size: 12px; color: var(--fg-muted); margin-top: 18px; }
+  code { background: #eef1f5; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>供需管理 · 明细分析</h1>
+  <p class="sub">供应系数热力图 —— 静态预览（非真实页面，但数据取自已录入的 products.db）</p>
+
+  <div class="note">
+    这份文件是<b>静态预览</b>，只用来核对热力图的呈现效果（格子是否等宽、颜色是否不刺眼、格内是否带系数）。
+    实际页面已按同样口径改造，需启动前后端后查看。
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <span class="dd"><b>项目：</b>选择项目 ▾</span>
+      <span class="dd"><b>物料：</b>选择物料 ▾</span>
+      <p class="hint">默认不预选。<b>客户需求一直呈现</b>（未选项目时看全部项目）；物料供需图与热力图需先选项目与物料。</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>客户需求</h3><span class="meta">全部 1 个项目</span></div>
+    <div class="card-body">
+      <div class="chart-ph">折线图（1-12 月）· 一直呈现，不再有折叠箭头</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>物料供需分析</h3><span class="meta">2 个物料有数据</span></div>
+    <div class="card-body">
+      <div class="chart-ph">柱状（供应商产能）+ 折线（物料需求）· 始终展开</div>
+      <p class="hint">未选项目或未选物料时，这里是一个空态卡：「请先选择项目与物料」。</p>
+
+      <div class="hm">
+        <div class="hm-head">
+          <div>
+            <h4>供应系数热力（行 = 物料 · 列 = 月份）</h4>
+            <p>格内数值 = 产能 ÷ 需求；0.85 表示只够需求的 85%</p>
+          </div>
+          <div class="legend">
+            <span><i style="background:#f09595"></i>缺口 &lt; 1.0</span>
+            <span><i style="background:#fac775"></i>紧张 1.0 - 1.3</span>
+            <span><i style="background:#c0dd97"></i>充足 &gt; 1.3</span>
+            <span><i style="background:#e8e8e6"></i>无需求</span>
+          </div>
+        </div>
+        <div class="hm-scroll">
+          <div class="grid" id="hm"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">
+    数据来源：<code>backend/products.db</code>（项目 ABC/LFP3 · 物料 191 模组侧板、415 模组端板）。
+    两个物料的产能约为需求的一半，因此 24 个格子全部落在「缺口」档（全部红色）。
+    若这与你的实际情况不符，多半是<b>供应商产能还没录全</b>。
+  </p>
+</div>
+
+<script>
+  const MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12];
+  const ROWS = [
+    { pn: "191", name: "模组侧板",
+      demand: [100024,60246,94246,106002,102046,104282,124270,133864,122482,113782,123646,118282],
+      cap:    [58000,58000,58000,58000,58000,58000,58000,58000,58000,58000,58000,58000] },
+    { pn: "415", name: "模组端板",
+      demand: [150036,90369,141369,159003,153069,156423,186405,200796,183723,170673,185469,177423],
+      cap:    [80000,80000,80000,80000,80000,80000,80000,80000,80000,80000,80000,80000] }
+  ];
+
+  function cls(coef) {
+    if (coef === null) return "c-none";
+    if (coef < 1.0) return "c-red";
+    if (coef <= 1.3) return "c-amber";
+    return "c-green";
+  }
+
+  const grid = document.getElementById("hm");
+  const html = [];
+  html.push('<div class="gl">物料</div>');
+  MONTHS.forEach(m => html.push('<div class="gh">' + m + '</div>'));
+
+  ROWS.forEach(r => {
+    html.push('<div><div class="pn">' + r.pn + '</div><div class="mname">' + r.name + '</div></div>');
+    for (let i = 0; i < 12; i++) {
+      const d = r.demand[i], c = r.cap[i];
+      const coef = d > 0 ? c / d : null;
+      const tip = (i + 1) + " 月 · " + r.pn + "\n需求 " + d.toLocaleString() + " · 产能 " + c.toLocaleString() +
+        (coef === null ? "\n该月没有需求，算不出供应系数"
+                       : "\n供应系数 " + coef.toFixed(2) + (c - d < 0 ? "\n缺口 " + (d - c).toLocaleString() : "\n盈余 " + (c - d).toLocaleString()));
+      html.push('<div class="cell ' + cls(coef) + '" title="' + tip + '">' + (coef === null ? "—" : coef.toFixed(2)) + '</div>');
+    }
+  });
+  grid.innerHTML = html.join("");
+</script>
+</body>
+</html>

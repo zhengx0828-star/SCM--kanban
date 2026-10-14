@@ -259,6 +259,11 @@ export const projectApi = {
   unlink(projectId: number, linkId: number) {
     return apiClient.delete(`/projects/${projectId}/relations/${linkId}`);
   },
+
+  /** 供需管理 Excel 导入模板直链（服务端生成，两个 sheet：客户需求 + 物料BOM与产能） */
+  demandTemplateUrl() {
+    return "/api/projects/demand-import-template";
+  },
 };
 
 export const ruleApi = {

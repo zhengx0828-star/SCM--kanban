@@ -21,6 +21,7 @@ import { useProjectSuppliers } from "@/hooks/use-projects";
 import { CITIES } from "@/lib/cities";
 import { cn, getApiErrorMessage } from "@/lib/utils";
 import type { Project } from "@/types/project";
+import type { Supplier } from "@/types/supplier";
 
 /** 供应商录入校验规则（与后端 Pydantic 约束一致） */
 const supplierFormSchema = z.object({
@@ -42,16 +43,27 @@ const supplierFormSchema = z.object({
 
 type SupplierFormValues = z.infer<typeof supplierFormSchema>;
 
-const DEFAULT_VALUES: SupplierFormValues = {
+/** 表单空值：经纬度**不预置 0**（0 是无效值，会让用户以为要手动改），留空显示占位符 */
+const DEFAULT_VALUES: Partial<SupplierFormValues> = {
   name: "",
   code: "",
   city: "",
-  longitude: 0,
-  latitude: 0,
+  longitude: undefined,
+  latitude: undefined,
   contact_person: "",
   phone: "",
   remark: "",
 };
+
+/** 由坐标反查最接近的省份名（供应商只有坐标、没存省份名时用来补全下拉展示） */
+function provinceByCoords(lng: number, lat: number): string | null {
+  let best: { name: string; d: number } | null = null;
+  for (const c of CITIES) {
+    const d = (c.longitude - lng) ** 2 + (c.latitude - lat) ** 2;
+    if (!best || d < best.d) best = { name: c.name, d };
+  }
+  return best ? best.name : null;
+}
 
 /** 通用内联可搜索下拉（点击外部关闭，支持"使用输入名称"） */
 function InlineCombobox({
@@ -232,7 +244,8 @@ export function SupplierFormDialog({ open, onOpenChange, project = null, preset 
   const city = watch("city");
   const name = watch("name");
 
-  /* 弹窗打开时重置（项目上下文/取点预填变化时也重置，避免跨项目串数据） */
+  /* 弹窗打开时重置（项目上下文/取点预填变化时也重置，避免跨项目串数据）。
+     经纬度不预置 0，留 undefined → 输入框显示占位符。 */
   useEffect(() => {
     if (!open) return;
     setSubmitError(null);
@@ -240,8 +253,8 @@ export function SupplierFormDialog({ open, onOpenChange, project = null, preset 
     reset({
       ...DEFAULT_VALUES,
       city: preset?.city ?? "",
-      longitude: preset?.longitude ?? 0,
-      latitude: preset?.latitude ?? 0,
+      longitude: preset?.longitude,
+      latitude: preset?.latitude,
     });
   }, [open, project?.id, preset, reset]);
 
@@ -255,29 +268,62 @@ export function SupplierFormDialog({ open, onOpenChange, project = null, preset 
     [candidateSuppliers]
   );
 
-  /** 选择已有供应商：自动带出其信息（底表供应商无坐标则留空待补全） */
+  /** 把某个已有供应商的信息填入表单：代码始终带出，地图字段仅在供应商**有值时**覆盖。
+   *
+   * 注意：不要用空值覆盖用户已填内容 —— 供应商没有省份/坐标时保持原样，
+   * 否则"先手选省份、再选供应商"会把省份和坐标清空（旧实现的坑）。
+   */
+  const applySupplierToForm = (s: Supplier) => {
+    setExistingSupplierId(s.id);
+    setValue("name", s.name);
+    setValue("code", s.code); // ★ 代码始终自动带出
+    // 省份：优先用 city；只有坐标时按坐标反查省份；都没有则不动用户已选值
+    if (s.city) {
+      setValue("city", s.city);
+    } else if (s.longitude != null && s.latitude != null) {
+      const guess = provinceByCoords(s.longitude, s.latitude);
+      if (guess) setValue("city", guess);
+    }
+    if (s.longitude != null && s.latitude != null) {
+      setValue("longitude", s.longitude);
+      setValue("latitude", s.latitude);
+    }
+    setValue("contact_person", s.contact_person ?? "");
+    setValue("phone", s.phone ?? "");
+  };
+
+  /** 从下拉里选中某个已有供应商 */
   const handleSupplierPick = (key: string) => {
     if (!key) {
       setExistingSupplierId(null);
       return;
     }
     const s = candidateSuppliers.find((x) => x.id === Number(key));
-    if (!s) return;
-    setExistingSupplierId(s.id);
-    setValue("name", s.name);
-    setValue("code", s.code);
-    setValue("city", s.city ?? "");
-    setValue("longitude", s.longitude ?? 0);
-    setValue("latitude", s.latitude ?? 0);
-    setValue("contact_person", s.contact_person ?? "");
-    setValue("phone", s.phone ?? "");
+    if (s) applySupplierToForm(s);
   };
 
-  /** 手动输入新供应商名称 */
+  /** 手动输入供应商名称：同名直接按"补全已有"处理；新名字则给个代码建议 */
   const handleSupplierTyped = (typed: string) => {
+    const typedName = typed.trim();
+    // ★ 命名命中已有供应商 → 直接带出代码 / 省份 / 坐标，不必再从下拉点一次
+    const hit = candidateSuppliers.find(
+      (x) => x.name.trim().toLowerCase() === typedName.toLowerCase()
+    );
+    if (hit) {
+      applySupplierToForm(hit);
+      return;
+    }
     setExistingSupplierId(null);
-    setValue("name", typed);
-    // 自动生成代码建议（可改）—— 用全量底表的最大编号避免与已有冲突（不仅看项目内）
+    setValue("name", typedName);
+    // 底表还没加载完就不猜，避免生成无意义的 SUP-001
+    const codes = allSuppliers.map((s) => s.code).filter(Boolean);
+    if (codes.length === 0) return;
+    // 现有代码全是纯数字（如 12081 / 1267）→ 建议下一个数字；否则沿用 SUP-xxx 风格
+    if (codes.every((c) => /^\d+$/.test(c))) {
+      const next = codes.reduce((m, c) => Math.max(m, Number(c)), 0) + 1;
+      setValue("code", String(next));
+      return;
+    }
     const maxCode = allSuppliers.reduce((acc, s) => {
       const n = Number(s.code.replace(/\D/g, ""));
       return Number.isFinite(n) ? Math.max(acc, n) : acc;
@@ -285,13 +331,13 @@ export function SupplierFormDialog({ open, onOpenChange, project = null, preset 
     setValue("code", `SUP-${String(maxCode + 1).padStart(3, "0")}`);
   };
 
-  /** 选择城市：自动带出经纬度 */
+  /** 选择省份：自动带出经纬度（并立刻清掉旧的校验报错） */
   const handleCityPick = (cname: string) => {
     setValue("city", cname, { shouldValidate: true });
     const c = CITIES.find((x) => x.name === cname);
     if (c) {
-      setValue("longitude", c.longitude);
-      setValue("latitude", c.latitude);
+      setValue("longitude", c.longitude, { shouldValidate: true });
+      setValue("latitude", c.latitude, { shouldValidate: true });
     }
   };
 

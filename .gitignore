@@ -30,6 +30,10 @@ Thumbs.db
 # Project-local runtimes（体积大，不进 git；内网迁移需随目录整体拷贝）
 runtime/
 
+# 本地备份文件（改写前留档，不进版本库）
+*.bak-orig
+*.bak
+
 # 临时日志/报告
 _*.log
 size_report.txt

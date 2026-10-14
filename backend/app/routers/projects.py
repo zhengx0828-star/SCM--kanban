@@ -9,19 +9,23 @@
 - PATCH  /api/projects/{id}/relations/{link_id}   维护项目专属字段
 - DELETE /api/projects/{id}/relations/{link_id}   解除项目-供应关系
 - PUT    /api/projects/{id}/demand           批量维护某物料的客户需求（1-12月）
+- PUT    /api/projects/{id}/bom              批量维护某物料的 BOM 用量系数
 - GET    /api/projects/{id}/materials        项目下关联的物料（去重）
 - GET    /api/projects/{id}/suppliers        项目下关联的供应商（去重，含点位字段）
+- GET    /api/projects/demand-import-template 下载供需管理 Excel 导入模板（两个 sheet）
 """
 
+import io
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
 from ..models import (
+    Change,
     InventoryDay,
     InventoryPlan,
     Material,
@@ -205,8 +209,102 @@ def delete_project(project_id: int, db: Session = Depends(get_db)) -> None:
         db.execute(delete(InventoryDay).where(InventoryDay.plan_id.in_(plan_ids)))
         db.execute(delete(InventoryPlan).where(InventoryPlan.id.in_(plan_ids)))
     db.execute(delete(ShareRecord).where(ShareRecord.project_id == project_id))
+
+    # ★ 记录本项目挂载过的供应关系，供删项目后清理孤儿主数据（L2/L1）。
+    #   必须在 db.delete(project) 之前取，级联删掉 project_supply_relations 后就查不到了。
+    affected_relation_ids = set(
+        db.execute(
+            select(ProjectSupplyRelation.supply_relation_id).where(
+                ProjectSupplyRelation.project_id == project_id
+            )
+        ).scalars().all()
+    )
+
     db.delete(project)  # 级联删除 project_supply_relations
+    db.flush()  # 先落库级联删除，后续「是否仍被引用」的判定才准确
+
+    _purge_orphan_master_data(db, affected_relation_ids)
     db.commit()
+
+
+def _purge_orphan_master_data(db: Session, relation_ids: set[int]) -> None:
+    """清理删项目后变成孤儿的主数据（L2 供应关系 / L1 物料 / L1 供应商）。
+
+    严格按「是否还有其他项目引用」判定，**绝不删除仍被任何项目使用的主数据**。
+    - L2：删掉的项目的明细已清空后，若某供应关系已无任何 project_supply_relations 引用，
+          则该关系是孤儿，删除（其 share_records 由 ORM 级联一并清理）。
+    - L1 物料：删完孤儿关系后，若某物料已无任何 supply_relations，且不被 inventory_plans /
+              changes 引用，则删除（避免误伤库存档案 / 变更单）。
+    - L1 供应商：同理，且额外检查 inventory_plans 引用（suppliers 删除有 409 保护，这里同口径）。
+    """
+    if not relation_ids:
+        return
+
+    # --- L2：筛选出已无任何项目引用的供应关系 ---
+    orphan_rel_ids: list[int] = []
+    for rel_id in relation_ids:
+        still_referenced = db.execute(
+            select(func.count()).select_from(ProjectSupplyRelation).where(
+                ProjectSupplyRelation.supply_relation_id == rel_id
+            )
+        ).scalar_one()
+        if still_referenced == 0:
+            orphan_rel_ids.append(rel_id)
+
+    if not orphan_rel_ids:
+        return
+
+    # 收集这些孤儿关系涉及的物料 / 供应商，删除后再分别判定是否还有其他关系在用
+    orphan_candidates = db.execute(
+        select(SupplyRelation.material_id, SupplyRelation.supplier_id).where(
+            SupplyRelation.id.in_(orphan_rel_ids)
+        )
+    ).all()
+
+    # 删除孤儿供应关系（share_records 走 ORM relationship 级联）
+    for rel in db.execute(select(SupplyRelation).where(SupplyRelation.id.in_(orphan_rel_ids))).scalars().all():
+        db.delete(rel)
+    db.flush()
+
+    material_ids = {m for m, _ in orphan_candidates}
+    supplier_ids = {s for _, s in orphan_candidates}
+
+    # --- L1 物料：无任何供应关系，且不被库存档案 / 变更单引用才删 ---
+    for material_id in material_ids:
+        rel_count = db.execute(
+            select(func.count()).select_from(SupplyRelation).where(SupplyRelation.material_id == material_id)
+        ).scalar_one()
+        if rel_count:
+            continue
+        plan_count = db.execute(
+            select(func.count()).select_from(InventoryPlan).where(InventoryPlan.material_id == material_id)
+        ).scalar_one()
+        if plan_count:
+            continue
+        change_count = db.execute(
+            select(func.count()).select_from(Change).where(Change.material_id == material_id)
+        ).scalar_one()
+        if change_count:
+            continue
+        material = db.get(Material, material_id)
+        if material is not None:
+            db.delete(material)
+
+    # --- L1 供应商：无任何供应关系，且不被库存档案引用才删 ---
+    for supplier_id in supplier_ids:
+        rel_count = db.execute(
+            select(func.count()).select_from(SupplyRelation).where(SupplyRelation.supplier_id == supplier_id)
+        ).scalar_one()
+        if rel_count:
+            continue
+        plan_count = db.execute(
+            select(func.count()).select_from(InventoryPlan).where(InventoryPlan.supplier_id == supplier_id)
+        ).scalar_one()
+        if plan_count:
+            continue
+        supplier = db.get(Supplier, supplier_id)
+        if supplier is not None:
+            db.delete(supplier)
 
 
 @router.get("/{project_id}/relations", response_model=list[ProjectSupplyRelationRead], summary="查询项目下的供应明细")
@@ -342,7 +440,14 @@ def create_project_relation(
 def quick_add_project_relation(
     project_id: int, payload: ProjectSupplyRelationQuickCreate, db: Session = Depends(get_db)
 ) -> ProjectSupplyRelationRead:
-    """底表一行式录入：PN/物料名称/供应商名称/供应商代码 → 自动建主数据 → 挂载到项目。"""
+    """底表一行式录入：PN/物料名称/供应商名称/供应商代码 → 自动建主数据 → 挂载到项目。
+
+    ★ 关于全局主数据名称（2026-10-14 事故修复）：
+    物料按 PN、供应商按 code 是**全项目共用的一条**，项目只是引用它。
+    早期实现只要名称不一致就无条件改名，结果 Excel 批量导入 EP1 时把共用的「191 模组侧板」
+    改成了「CCS」，LFP3 页面上显示的 191 名称跟着变 —— 用户视角就是"我导 EP1，LFP3 自己变了"。
+    现在由 `sync_master_names` 控制：批量导入传 False（只复用、绝不改名），手动快速录入默认 True。
+    """
     _get_project(db, project_id)
 
     # 1. 物料：按 pn 查找，不存在则创建
@@ -351,8 +456,8 @@ def quick_add_project_relation(
         material = Material(pn=payload.pn, name=payload.material_name)
         db.add(material)
         db.flush()
-    elif material.name != payload.material_name:
-        material.name = payload.material_name  # 同步最新物料名称
+    elif payload.sync_master_names and material.name != payload.material_name:
+        material.name = payload.material_name  # 同步最新物料名称（**会改到所有引用该物料的项目**，故仅手动录入允许）
         db.flush()
 
     # 2. 供应商：按 code 查找（兜底按名称），不存在则创建
@@ -363,8 +468,8 @@ def quick_add_project_relation(
         supplier = Supplier(code=payload.supplier_code, name=payload.supplier_name)
         db.add(supplier)
         db.flush()
-    elif supplier.name != payload.supplier_name:
-        supplier.name = payload.supplier_name  # 同步最新供应商名称
+    elif payload.sync_master_names and supplier.name != payload.supplier_name:
+        supplier.name = payload.supplier_name  # 同上：仅手动录入才允许改全局主数据
         db.flush()
 
     # 3. 供应关系：按（物料 + 供应商）查找，不存在则创建
@@ -390,7 +495,7 @@ def quick_add_project_relation(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该物料-供应商已在此项目中，请勿重复录入")
 
-    data = payload.model_dump(exclude={"pn", "material_name", "supplier_name", "supplier_code"})
+    data = payload.model_dump(exclude={"pn", "material_name", "supplier_name", "supplier_code", "sync_master_names"})
     data["demand"] = _list_to_json(data.get("demand"))
     data["capacity"] = _list_to_json(data.get("capacity"))
     link = ProjectSupplyRelation(project_id=project_id, supply_relation_id=rel.id, **data)
@@ -504,3 +609,104 @@ def delete_project_relation(project_id: int, link_id: int, db: Session = Depends
     link = _get_link(db, project_id, link_id)
     db.delete(link)
     db.commit()
+
+
+# --------------------------------------------------------------------------- #
+#  供需管理 Excel 导入模板                                                      #
+# --------------------------------------------------------------------------- #
+#
+# 与「供应商列表」的四元组模板**职责不同**：
+#   · 供应商列表模板 = 建关系（PN · 物料名 · 供应商名 · 供应商代码），建 L1/L2 主数据并挂载
+#   · 本模板       = 录数值（需求 · BOM · 产能），只写项目明细（L3）扩展字段，
+#                    **不会新建物料-供应商关系**——关系不存在时导入会报错跳过。
+#
+# 两个 sheet：
+#   `客户需求`        项目代码 | 1月 … 12月            （项目级，一行一个项目）
+#   `物料BOM与产能`   项目代码 | 物料PN | 物料名称 | BOM系数 | 供应商代码 | 供应商名称 |
+#                     产能_1月 … 产能_12月            （一行 = 项目×物料×供应商）
+
+_DEMAND_TEMPLATE_MONTHS = [f"{i}月" for i in range(1, 13)]
+
+
+@router.get("/demand-import-template", summary="下载供需管理 Excel 导入模板（客户需求 + 物料BOM与产能）")
+def demand_import_template() -> Response:
+    """给同事填的**空白 Excel**，列名与前端导入解析规则一字不差。
+
+    示例行故意用了**不存在的项目代码**（PRJ-示例），万一被误导入也只会报「找不到项目」
+    并跳过，不会往库里写脏数据。填写时直接删掉灰色示例行即可。
+    """
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ImportError:  # pragma: no cover
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="服务端未安装 openpyxl")
+
+    wb = openpyxl.Workbook()
+    head_fill = PatternFill("solid", fgColor="F1EFE8")
+    head_font = Font(bold=True, size=10)
+    demo_font = Font(color="9A9A94", size=10, italic=True)
+    note_font = Font(size=9, color="9A9A94")
+    center = Alignment(horizontal="center", vertical="center")
+
+    # ---- sheet 1：客户需求（项目级 · 1-12 月）----
+    ws1 = wb.active
+    ws1.title = "客户需求"
+    cols1 = ["项目代码", *_DEMAND_TEMPLATE_MONTHS]
+    for i, label in enumerate(cols1, start=1):
+        cell = ws1.cell(row=1, column=i, value=label)
+        cell.fill = head_fill
+        cell.font = head_font
+        cell.alignment = center
+    demo1 = ["PRJ-示例", 500, 600, 550, 500, 480, 500, 520, 560, 700, 800, 780, 900]
+    for i, val in enumerate(demo1, start=1):
+        ws1.cell(row=2, column=i, value=val).font = demo_font
+    ws1.cell(
+        row=4, column=1,
+        value="填写说明：① 一行 = 一个项目；项目代码必须是系统里已存在的（见「供应商列表 · 项目」）。"
+              "② 1-12 月填客户需求量，留空 = 0。③ 需求是项目级数据，录一次自动同步到该项目下所有物料明细行。"
+              "④ 灰色示例行务必删除。",
+    ).font = note_font
+    ws1.column_dimensions["A"].width = 16
+    for i in range(2, 14):
+        ws1.column_dimensions[get_column_letter(i)].width = 9
+    ws1.freeze_panes = "B2"
+
+    # ---- sheet 2：物料BOM与产能（项目 × 物料 × 供应商）----
+    ws2 = wb.create_sheet("物料BOM与产能")
+    cols2 = ["项目代码", "物料PN", "物料名称", "BOM系数", "供应商代码", "供应商名称", *(f"产能_{m}" for m in _DEMAND_TEMPLATE_MONTHS)]
+    for i, label in enumerate(cols2, start=1):
+        cell = ws2.cell(row=1, column=i, value=label)
+        cell.fill = head_fill
+        cell.font = head_font
+        cell.alignment = center
+    demo2 = ["PRJ-示例", "110205-00031", "车规级 MCU 主控芯片", 2, "SUP-001", "示例供应商",
+             3000, 3200, 3000, 2800, 2600, 2800, 2900, 3100, 3600, 4000, 4200, 4500]
+    for i, val in enumerate(demo2, start=1):
+        ws2.cell(row=2, column=i, value=val).font = demo_font
+    ws2.cell(
+        row=4, column=1,
+        value="填写说明：① 一行 = 一个「项目 × 物料 × 供应商」，即一条已有的供应明细。"
+              "② 项目代码 / 物料PN / 供应商代码（以及该物料-供应商关系）必须已存在，否则该行报错跳过。"
+              "③ BOM系数 = 1 台产品需要几个该物料；同一项目同一物料的各行请填相同值。"
+              "④ 产能_1月 … 产能_12月 = 该供应商该物料的月度产能，留空 = 0。⑤ 灰色示例行务必删除。",
+    ).font = note_font
+    for col, w in zip(["A", "B", "C", "D", "E", "F"], [16, 16, 24, 10, 14, 20]):
+        ws2.column_dimensions[col].width = w
+    for i in range(7, 19):
+        ws2.column_dimensions[get_column_letter(i)].width = 9
+    ws2.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = "supply-demand-import-template.xlsx"
+    from urllib.parse import quote
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}"
+        },
+    )
