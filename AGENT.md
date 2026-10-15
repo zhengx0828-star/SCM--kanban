@@ -657,6 +657,35 @@ python scripts/_tmp/fp_check.py diff      # 退出码非 0 = 有残留
    `backend/products.db`，无法用环境变量重定向），改完再核对真实库 `mtime` 未变。
    ⚠️ 绝不要对着用户**正在运行**的真实后端点「确认导入」——那会真的再改一次数据。
 
+### 坑 24：★ 批处理的两个路径坑（`%~dp0.` 让 `if exist` 判假；尾反斜杠 + 引号毁掉 robocopy）
+
+2026-10-15 新增 `update-from-zip.bat`（内网机器不能直连 GitHub 时，用下载的 zip 换代码、保留本地数据）时踩到，实测结论：
+
+**坑 A：`set "T=%~dp0."` 之后 `if exist "%T%backend\products.db"` 永远为假。**
+
+```
+%~dp0   -> C:\...\old\    -> if exist "...\backend\products.db"  -> FOUND
+%~dp0.  -> C:\...\old\.   -> if exist "...\backend\products.db"  -> MISSING
+```
+
+cmd 的 `if exist` 不做路径规范化，多一个 `\.` 就查不到（`dir` / `robocopy` 却能正常工作，所以特别隐蔽：文件明明在，备份逻辑却静默跳过）。**`%~dp0` 自带尾反斜杠，直接用，不要画蛇添足加 `.`。**
+
+**坑 B：`"C:\path\dir\"` 结尾的 `\"` 被当成转义引号，参数串提前闭合。**
+
+`robocopy "%SOURCE%" "%TARGET%"` 若 `%TARGET%` 以 `\` 结尾 → 变成 `"...\old\"` → robocopy 参数错乱，直接打印一整屏 usage（帮助里会出现 `/MIR` 字样，**别被误导**以为是自己传错了开关）。
+
+**规矩**：凡是要传给外部程序（robocopy / xcopy 等）的目录变量，**先去尾反斜杠**，拼接时显式写分隔符：
+
+```bat
+set "TARGET=%~dp0"
+set "TARGET=%TARGET:~0,-1%"          rem %~dp0 必以 \ 结尾，无条件截掉最后一位
+robocopy "%SOURCE%" "%TARGET%" ...    rem 此时引号安全
+```
+
+**关联坑**：`%~1`（拖拽进来的路径）也可能带尾反斜杠，规范化用 `pushd "%SOURCE%"` → `set "SOURCE=%CD%"` → `popd`。
+
+**新脚本 `update-from-zip.bat`（项目根目录）**：把 GitHub 下载解压出来的代码文件夹**拖到它上面松手**，自动执行「备份 `products.db` → robocopy 覆盖代码（排除 `runtime/`、`node_modules/`、`products.db`）→ 提示完成」。改它同样受坑 7 约束（**必须 GBK + CRLF**，现文件已是 GBK）。
+
 
 ---
 

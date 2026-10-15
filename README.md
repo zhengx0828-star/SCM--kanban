@@ -337,6 +337,8 @@ git push -u origin master
 
 ### 9.2 内网同步
 
+**方式 A：内网机器能直连 GitHub（有 git）**
+
 ```powershell
 # 首次：clone + 补拷贝被忽略的目录
 git clone https://github.com/zhengx0828-star/SCM--kanban.git
@@ -346,6 +348,22 @@ git clone https://github.com/zhengx0828-star/SCM--kanban.git
 cd scm-kanban
 git pull
 ```
+
+**方式 B：内网机器打不开 GitHub，只能下载 zip 包拷进来（推荐用脚本）**
+
+外网机器打开仓库页面 → Code → Download ZIP，把 zip 拷到内网机器解压到任意临时位置（解压后里面应能直接看到 `backend/`、`frontend/` 等目录），然后：
+
+1. 双击项目根目录的 **`update-from-zip.bat`**；
+2. 把**解压出来的那个文件夹拖到脚本上**松手；
+3. 脚本自动完成：备份 `backend/products.db` → 用新代码覆盖项目代码（**排除 `runtime/`、`node_modules/`、`products.db`**）→ 提示完成；
+4. 重新双击 `start-all.bat` 启动。
+
+> **⚠️ 千万不要「删掉旧项目文件夹 → 用解压出来的新文件夹顶替」。** zip 里**没有**这三样：
+> - `backend/products.db` —— 你录入的看板数据
+> - `runtime/` —— Python 运行时（内网离线必需）
+> - `frontend/node_modules/` —— 前端依赖（内网离线必需）
+>
+> 直接顶替 = 数据全没 + 系统起不来。脚本做的就是「换代码、留这三样」。
 
 ### 9.3 日常提交（两端通用，Windows 命令）
 
