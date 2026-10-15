@@ -267,6 +267,8 @@ export interface ChangeCreateInput {
 }
 
 export interface ChangeUpdateInput {
+  project_id?: number;
+  material_id?: number;
   change_type_id?: number;
   supplier_id?: number | null;
   title?: string;

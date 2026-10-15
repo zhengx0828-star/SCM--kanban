@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ClipboardCopy, Download, FileUp, Loader2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { AlertCircle, ClipboardCopy, Download, FileSpreadsheet, FileUp, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,8 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useImportChanges } from "@/hooks/use-changes";
 import { changeApi } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/utils";
@@ -19,8 +17,8 @@ import { getApiErrorMessage } from "@/lib/utils";
 /**
  * 变更管理 Excel 导入（**双 sheet**）。
  *
- * 现状说明：与库存模块一致，导入走「服务端本地文件路径」（前后端同机），
- * 不做浏览器上传。后续接上传时只需换掉接口入参。
+ * 文件选择方式与供需管理一致：点「选择文件」从本机挑选 .xlsx/.xls，
+ * 文件内容随请求体上传（后端 openpyxl 解析，校验规则不变）。
  *
  * 两个工作表：
  *   `变更单`  序号 / 项目代码 / 物料PN / 变更类型 / 责任人 / 标题 / 描述 / 状态
@@ -49,16 +47,23 @@ interface Props {
 
 export function ChangeImportDialog({ open, onOpenChange }: Props) {
   const importMutation = useImportChanges();
-  const [filePath, setFilePath] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const reset = () => {
+    setFile(null);
+    setError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const handleImport = () => {
-    if (!filePath.trim()) {
-      setError("请输入 Excel 文件路径");
+    if (!file) {
+      setError("请先选择 Excel 文件");
       return;
     }
     setError(null);
-    importMutation.mutate(filePath.trim(), {
+    importMutation.mutate(file, {
       onSuccess: (res) => {
         const summary =
           `新增变更单 ${res.created_changes} · 更新 ${res.updated_changes} · ` +
@@ -70,7 +75,7 @@ export function ChangeImportDialog({ open, onOpenChange }: Props) {
           toast.success(`导入完成：${summary}`);
         }
         onOpenChange(false);
-        setFilePath("");
+        reset();
       },
       onError: (err) => setError(getApiErrorMessage(err)),
     });
@@ -98,7 +103,13 @@ export function ChangeImportDialog({ open, onOpenChange }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) reset();
+        onOpenChange(v);
+      }}
+    >
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Excel 导入变更单与待办项</DialogTitle>
@@ -110,16 +121,29 @@ export function ChangeImportDialog({ open, onOpenChange }: Props) {
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>Excel 文件路径（服务器本地）</Label>
-            <Input
-              value={filePath}
-              onChange={(e) => setFilePath(e.target.value)}
-              placeholder="如 C:/changes/2026-10-变更台账.xlsx"
+          {/* 文件选择（与供需管理一致） */}
+          <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setError(null);
+              }}
+              disabled={importMutation.isPending}
+              className="hidden"
             />
-            <p className="text-[11px] text-muted-foreground">
-              前后端同机运行，直接填文件在电脑上的绝对路径即可。
-            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={importMutation.isPending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <FileSpreadsheet className="mr-1.5 h-4 w-4" />
+              选择文件
+            </Button>
+            {file && <span className="truncate text-sm text-muted-foreground">{file.name}</span>}
           </div>
 
           {/* 模板说明 */}
@@ -154,11 +178,16 @@ export function ChangeImportDialog({ open, onOpenChange }: Props) {
             </p>
           </div>
 
-          {error && <p className="text-xs text-red-500">{error}</p>}
+          {error && (
+            <p className="flex items-center gap-1.5 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950/50">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              {error}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={importMutation.isPending}>
             取消
           </Button>
           <Button onClick={handleImport} disabled={importMutation.isPending}>

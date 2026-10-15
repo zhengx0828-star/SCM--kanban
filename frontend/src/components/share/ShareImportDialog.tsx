@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { FileUp, Loader2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { AlertCircle, FileSpreadsheet, FileUp, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,15 +10,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useImportShare } from "@/hooks/use-share";
 import { getApiErrorMessage } from "@/lib/utils";
 
 /**
  * 份额数据 Excel 导入弹窗（按项目导入）。
  *
- * 说明：当前为本地开发模式，导入走「服务端文件路径」（前端上传后续接）。
+ * 文件选择方式与供需管理一致：点「选择文件」从本机挑选 .xlsx/.xls，
+ * 文件内容随请求体上传（后端 openpyxl 解析，校验规则不变）。
  * Excel 列约定（表头行，基地按成对两列）：
  *   物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C |
  *   基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数 | ...
@@ -36,21 +35,28 @@ interface Props {
 
 export function ShareImportDialog({ open, onOpenChange, projectId, month }: Props) {
   const importMutation = useImportShare();
-  const [filePath, setFilePath] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const reset = () => {
+    setFile(null);
+    setError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
   const handleImport = () => {
     if (!projectId) {
       setError("请先选择项目");
       return;
     }
-    if (!filePath.trim()) {
-      setError("请输入 Excel 文件路径");
+    if (!file) {
+      setError("请先选择 Excel 文件");
       return;
     }
     setError(null);
     importMutation.mutate(
-      { projectId, month, filePath: filePath.trim() },
+      { projectId, month, file },
       {
         onSuccess: (res) => {
           if (res.errors.length > 0) {
@@ -59,7 +65,7 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
             toast.success(`导入完成：新增 ${res.imported} 条，更新 ${res.updated} 条，跳过 ${res.skipped} 条`);
           }
           onOpenChange(false);
-          setFilePath("");
+          reset();
         },
         onError: (err) => setError(getApiErrorMessage(err)),
       }
@@ -67,7 +73,13 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) reset();
+        onOpenChange(v);
+      }}
+    >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>导入份额数据（{month}）</DialogTitle>
@@ -77,24 +89,42 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>Excel 文件路径</Label>
-            <Input
-              value={filePath}
-              onChange={(e) => setFilePath(e.target.value)}
-              placeholder="如 C:/share/2026-08.xlsx"
+          {/* 文件选择（与供需管理一致） */}
+          <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setError(null);
+              }}
+              disabled={importMutation.isPending}
+              className="hidden"
             />
-            <p className="text-[11px] text-muted-foreground">
-              开发模式暂用服务端本地路径；列顺序：物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C |
-              基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数…（基地成对两列）
-            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={importMutation.isPending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <FileSpreadsheet className="mr-1.5 h-4 w-4" />
+              选择文件
+            </Button>
+            {file && <span className="truncate text-sm text-muted-foreground">{file.name}</span>}
           </div>
 
-          {error && <p className="text-xs text-red-500">{error}</p>}
+          {error && (
+            <p className="flex items-center gap-1.5 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950/50">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              {error}
+            </p>
+          )}
 
           <div className="rounded-md border border-dashed bg-muted/20 p-3 text-[11px] text-muted-foreground">
             <p className="font-medium text-foreground">导入校验规则（规则页 SOP）</p>
             <ul className="mt-1 list-inside list-disc space-y-0.5">
+              <li>列顺序：物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C | 基地A_份额 | 基地A_线数…（基地成对两列）</li>
               <li>Q / D / C 仅允许五档：1 / 0.7 / 0.5 / 0.3 / 0</li>
               <li>份额与基地份额均为 0-100；基地线数 ≥ 1（份额、线数成对填写）</li>
               <li>同一物料各供应商份额和 ≈ 100%（容差 ±1%）</li>

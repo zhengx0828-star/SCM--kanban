@@ -375,6 +375,12 @@ for f in ['start-all.bat','scripts/start-backend.bat','scripts/start-frontend.ba
 
 ### 坑 9：★ Excel 导入的 `file_path` 必须是**绝对路径**；两种 404 要分开看
 
+> **2026-10-15 更新**：份额 / 库存 / 变更三个导入接口已统一改为「浏览器选择文件」方式
+> （与供需管理一致）：前端弹窗点「选择文件」，Excel 内容以 `application/octet-stream`
+> 放在**请求体**里上传，后端 `await request.body()` → `io.BytesIO` → openpyxl 解析。
+> `file_path` 查询参数仅作**本地脚本兼容**（请求体为空时才走路径），HTTP 调用一律走请求体。
+> 注意：`seed_inventory_validation.py` 直调的入口改为 `import_inventory_from_path(path, db)`。
+
 **症状**：`POST /api/changes/import?file_path=scripts/_tmp/x.xlsx` 返回 `404`，第一反应是「路由不存在」，其实是**文件找不到**。
 
 **根因**：后端以 `cd backend` 启动，进程工作目录是 `backend/`，相对路径被解析成 `backend/scripts/_tmp/x.xlsx`。

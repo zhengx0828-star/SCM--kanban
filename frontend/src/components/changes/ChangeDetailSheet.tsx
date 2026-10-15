@@ -19,6 +19,8 @@ import {
   useUpdateChange,
   useVoidChange,
 } from "@/hooks/use-changes";
+import { useMaterials } from "@/hooks/use-materials";
+import { useProjects } from "@/hooks/use-projects";
 import { cn, getApiErrorMessage } from "@/lib/utils";
 import { changeStatusMeta } from "@/types/change";
 import { BurndownChart } from "./BurndownChart";
@@ -50,6 +52,8 @@ export function ChangeDetailSheet({ changeId, open, onOpenChange, onChanged }: P
   const { data: types = [] } = useChangeTypes(false);
   const { data: owners = [] } = useChangeOwners();
   const { data: burndown } = useChangeBurndown({ change_id: changeId ?? undefined }, Boolean(changeId) && open);
+  const { data: projectList } = useProjects({ page: 1, page_size: 100 });
+  const { data: materialList } = useMaterials({ page: 1, page_size: 100 });
 
   const updateChange = useUpdateChange();
   const voidChange = useVoidChange();
@@ -170,6 +174,52 @@ export function ChangeDetailSheet({ changeId, open, onOpenChange, onChanged }: P
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">所属项目</Label>
+                  <Select
+                    value={String(data.project_id)}
+                    disabled={isArchived}
+                    onValueChange={(v) => {
+                      const nv = Number(v);
+                      if (nv !== data.project_id) patch({ project_id: nv }, "项目已更新");
+                    }}
+                  >
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(projectList?.items ?? []).map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)} className="text-xs">
+                          {p.code} · {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs">关联物料</Label>
+                  <Select
+                    value={String(data.material_id)}
+                    disabled={isArchived}
+                    onValueChange={(v) => {
+                      const nv = Number(v);
+                      if (nv !== data.material_id) patch({ material_id: nv }, "物料已更新");
+                    }}
+                  >
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(materialList?.items ?? []).map((m) => (
+                        <SelectItem key={m.id} value={String(m.id)} className="text-xs">
+                          {m.pn} · {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 <div className="space-y-1.5">
                   <Label className="text-xs">变更类型</Label>
                   <Select

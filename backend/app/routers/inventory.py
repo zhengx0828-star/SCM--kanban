@@ -32,7 +32,7 @@
 - GET    /api/inventory/summary          遗留 KPI 概览（按 PN 去重；页面已改为前端本地漏斗统计）
 - PATCH  /api/inventory/plans/{id}       改 LeadTime / 初始现有库存（左冻结列）
 - PUT    /api/inventory/plans/{id}/days  批量改某日单元格（全格可编辑，落库即重算全链）
-- POST   /api/inventory/import           Excel 导入（服务端文件路径模式，列约定见函数 docstring）
+- POST   /api/inventory/import           Excel 导入（浏览器选择文件上传，请求体 octet-stream；file_path 兼容本地脚本）
 """
 
 import calendar
@@ -45,7 +45,7 @@ import statistics
 from datetime import date, datetime, timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -1239,11 +1239,16 @@ def delete_plan(plan_id: int, db: Session = Depends(get_db)) -> None:
 
 
 @router.post("/import", response_model=InventoryImportResult, summary="Excel 导入库存推算单元")
-def import_inventory(
-    file_path: str = Query(..., description="服务器本地 Excel 文件绝对路径"),
+async def import_inventory(
+    request: Request,
+    file_path: str | None = Query(None, description="兼容旧调用：服务器本地 Excel 绝对路径（浏览器上传时无需）"),
     db: Session = Depends(get_db),
 ) -> InventoryImportResult:
-    """Excel 列约定（表头行，模板见 README / 导入弹窗提示）：
+    """Excel 导入（与供需管理一致的「选择文件」方式）：前端弹窗里点「选择文件」
+    从本机挑选 .xlsx/.xls，文件内容放在请求体里上传（application/octet-stream）；
+    请求体为空时回退 file_path（本地脚本兼容）。
+
+    Excel 列约定（表头行，模板见 README / 导入弹窗提示）：
 
     项目代码 | 基地 | 物料PN | 供应商代码(可选) | 采购LeadTime(天) | 初始现有库存
              | 历史需求_YYYY-MM ... | 未来预测_YYYY-MM ...
@@ -1260,10 +1265,35 @@ def import_inventory(
         import openpyxl
     except ImportError:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="服务端未安装 openpyxl")
+
+    # Excel 来源：优先请求体（浏览器「选择文件」上传）；为空时回退服务器本地路径
+    content = await request.body()
+    if content:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Excel 文件解析失败，请确认为有效的 .xlsx / .xls 文件")
+    elif file_path:
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文件不存在: {file_path}")
+        wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="未收到 Excel 文件：请先在弹窗中选择文件再导入")
+    return _import_inventory_workbook(wb, db)
+
+
+def import_inventory_from_path(file_path: str, db: Session) -> InventoryImportResult:
+    """（本地脚本直调入口）从服务器本地路径导入，seed 脚本用。"""
+    import openpyxl
+
     if not os.path.exists(file_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文件不存在: {file_path}")
-
     wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    return _import_inventory_workbook(wb, db)
+
+
+def _import_inventory_workbook(wb, db: Session) -> InventoryImportResult:
+    """导入核心逻辑：解析 + 校验 + 写入（对已打开的工作簿，来源无关）。"""
     ws = wb.active
     rows_iter = ws.iter_rows(values_only=True)
     header = next(rows_iter, None)

@@ -336,10 +336,13 @@ export const shareApi = {
     return apiClient.delete(`/share/records/${id}`).then((res) => res.data);
   },
 
-  /** Excel 导入（服务端本地文件路径） */
-  importExcel(projectId: number, month: string, filePath: string) {
+  /** Excel 导入（浏览器「选择文件」上传，方式与供需管理一致；file 为本机选中的 .xlsx/.xls） */
+  importExcel(projectId: number, month: string, file: File) {
     return apiClient
-      .post<ShareImportResult>("/share/import", null, { params: { project_id: projectId, month, file_path: filePath } })
+      .post<ShareImportResult>("/share/import", file, {
+        params: { project_id: projectId, month },
+        headers: { "Content-Type": "application/octet-stream" },
+      })
       .then((res) => res.data);
   },
 
@@ -406,10 +409,12 @@ export const inventoryApi = {
     return apiClient.put<InventoryPlan>(`/inventory/plans/${id}/days`, cells, { params }).then((res) => res.data);
   },
 
-  /** Excel 导入（服务端本地文件路径） */
-  importExcel(filePath: string) {
+  /** Excel 导入（浏览器「选择文件」上传，方式与供需管理一致；file 为本机选中的 .xlsx/.xls） */
+  importExcel(file: File) {
     return apiClient
-      .post<InventoryImportResult>("/inventory/import", null, { params: { file_path: filePath } })
+      .post<InventoryImportResult>("/inventory/import", file, {
+        headers: { "Content-Type": "application/octet-stream" },
+      })
       .then((res) => res.data);
   },
 };
@@ -541,10 +546,12 @@ export const changeApi = {
     return apiClient.get<string[]>("/changes/owners").then((res) => res.data);
   },
 
-  /** Excel 双 sheet 导入（服务器本地路径，前后端同机） */
-  import(filePath: string) {
+  /** Excel 双 sheet 导入（浏览器「选择文件」上传，方式与供需管理一致） */
+  import(file: File) {
     return apiClient
-      .post<ChangeImportResult>("/changes/import", null, { params: { file_path: filePath } })
+      .post<ChangeImportResult>("/changes/import", file, {
+        headers: { "Content-Type": "application/octet-stream" },
+      })
       .then((res) => res.data);
   },
 

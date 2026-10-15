@@ -191,7 +191,7 @@ export function useDeleteInventoryPlan() {
 export function useImportInventory() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (filePath: string) => inventoryApi.importExcel(filePath),
+    mutationFn: (file: File) => inventoryApi.importExcel(file),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
     },

@@ -26,7 +26,7 @@ import io
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -1091,11 +1091,16 @@ def create_change(payload: ChangeCreate, db: Session = Depends(get_db)) -> Chang
 
 
 @router.post("/import", response_model=ChangeImportResult, summary="Excel 双 sheet 导入")
-def import_changes(
-    file_path: str = Query(..., description="服务器本地 Excel 文件绝对路径（前后端同机）"),
+async def import_changes(
+    request: Request,
+    file_path: Optional[str] = Query(None, description="兼容旧调用：服务器本地 Excel 绝对路径（浏览器上传时无需）"),
     db: Session = Depends(get_db),
 ) -> ChangeImportResult:
-    """模板两个 sheet：`变更单` + `待办项`（层级用「父项行号」表达）。
+    """Excel 导入（与供需管理一致的「选择文件」方式）：前端弹窗里点「选择文件」
+    从本机挑选 .xlsx/.xls，文件内容放在请求体里上传（application/octet-stream）；
+    请求体为空时回退 file_path（本地脚本兼容）。
+
+    模板两个 sheet：`变更单` + `待办项`（层级用「父项行号」表达）。
 
     匹配规则（用户确认）：
       - 变更单按**序号**匹配；序号留空 = 新建（再退一步用 项目代码+物料PN+标题 兜底匹配）
@@ -1109,11 +1114,21 @@ def import_changes(
 
     import os
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文件不存在: {file_path}")
+    # Excel 来源：优先请求体（浏览器「选择文件」上传）；为空时回退服务器本地路径
+    content = await request.body()
+    if content:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Excel 文件解析失败，请确认为有效的 .xlsx / .xls 文件")
+    elif file_path:
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文件不存在: {file_path}")
+        wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="未收到 Excel 文件：请先在弹窗中选择文件再导入")
 
     result = ChangeImportResult()
-    wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
 
     def sheet_rows(name: str) -> list[list[Any]]:
         if name not in wb.sheetnames:
@@ -1757,6 +1772,10 @@ def update_change(change_id: int, payload: ChangeUpdate, db: Session = Depends(g
     data = payload.model_dump(exclude_unset=True)
     if "change_type_id" in data and data["change_type_id"] and db.get(ChangeType, data["change_type_id"]) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="变更类型不存在")
+    if "project_id" in data and data["project_id"] and db.get(Project, data["project_id"]) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="项目不存在")
+    if "material_id" in data and data["material_id"] and db.get(Material, data["material_id"]) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="物料不存在")
     for key, value in data.items():
         if key == "title" and value:
             value = str(value).strip()

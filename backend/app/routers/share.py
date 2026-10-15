@@ -24,7 +24,7 @@
 - GET    /api/share/records?project_id=&month=&keyword= 明细列表
 - POST   /api/share/records                       手动新增记录
 - PUT    /api/share/records/{id}                 手动修改（重算 + 标记 edited_manually）
-- POST   /api/share/import                        Excel 导入（openpyxl，校验合法性）
+- POST   /api/share/import                        Excel 导入（浏览器选择文件上传，openpyxl，校验合法性）
 - POST   /api/share/rollover?from=&to=           月末结转：本月→上月、建议→quota_prev
 """
 
@@ -33,7 +33,7 @@ from collections import defaultdict
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -724,12 +724,15 @@ def delete_share_record(record_id: int, db: Session = Depends(get_db)) -> Respon
 
 @router.post("/import", response_model=ShareImportResult, summary="Excel 导入份额数据")
 async def import_share_records(
+    request: Request,
     project_id: int = Query(..., description="项目 ID"),
     month: str = Query(..., pattern=MONTH_PATTERN, description="目标月份（YYYY-MM）"),
-    file_path: str = Query(..., description="服务器本地 Excel 文件绝对路径"),
+    file_path: Optional[str] = Query(None, description="兼容旧调用：服务器本地 Excel 绝对路径（浏览器上传时无需）"),
     db: Session = Depends(get_db),
 ) -> ShareImportResult:
-    """从本地 Excel 导入（openpyxl 只读模式）。
+    """Excel 导入（openpyxl 只读模式），与供需管理一致的「选择文件」方式：
+    前端弹窗里点「选择文件」从本机挑选 .xlsx/.xls，文件内容放在请求体里上传
+    （application/octet-stream）；请求体为空时回退 file_path（本地脚本兼容）。
 
     列约定（表头行）：
       物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C |
@@ -749,15 +752,27 @@ async def import_share_records(
     except ImportError:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="服务端未安装 openpyxl")
 
+    import io
     import os
     import re
 
     if db.get(Project, project_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"项目 {project_id} 不存在")
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文件不存在: {file_path}")
 
-    wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    # Excel 来源：优先请求体（浏览器「选择文件」上传）；为空时回退服务器本地路径
+    content = await request.body()
+    if content:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Excel 文件解析失败，请确认为有效的 .xlsx / .xls 文件")
+    elif file_path:
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文件不存在: {file_path}")
+        wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="未收到 Excel 文件：请先在弹窗中选择文件再导入")
+
     ws = wb.active
     rows_iter = ws.iter_rows(values_only=True)
     header = next(rows_iter, None)

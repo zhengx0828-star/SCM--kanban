@@ -523,7 +523,7 @@ scm-kanban/
 | POST | `/api/share/records` | 手动新增份额记录（传 bases 自动算份额与建议配额） |
 | PUT | `/api/share/records/{id}` | 手动修改（显式传 share_current 视为手改并锁定；只传 bases 则清手改自动重算） |
 | DELETE | `/api/share/records/{id}` | 删除份额记录（剩余记录自动重算） |
-| POST | `/api/share/import` | Excel 导入份额数据（openpyxl；支持「基地X_份额/基地X_线数」成对列；校验 QDC 五档、份额 0-100） |
+| POST | `/api/share/import` | Excel 导入份额数据（浏览器「选择文件」上传，请求体 octet-stream；openpyxl 支持成对基地列；校验 QDC 五档、份额 0-100；`file_path` 参数仅兼容本地脚本） |
 | POST | `/api/share/rollover` | 月末结转：本月 → 下月空档 |
 
 **库存信号塔 inventory**
@@ -533,7 +533,7 @@ scm-kanban/
 | GET | `/api/inventory/summary` | 遗留 KPI 概览接口（按 PN 去重，暂未接 UI；顶部风险时间漏斗四卡由前端按当前筛选行本地统计） |
 | PATCH | `/api/inventory/plans/{id}` | 改 LeadTime / 初始现有库存（重算矩阵） |
 | PUT | `/api/inventory/plans/{id}/days` | 批量改某日单元格（落库即重算，返回整行新矩阵） |
-| POST | `/api/inventory/import` | Excel 导入（重建推算单元 + 清手改） |
+| POST | `/api/inventory/import` | Excel 导入（浏览器「选择文件」上传，请求体 octet-stream；重建推算单元 + 清手改；`file_path` 参数仅兼容本地脚本） |
 
 **规则 rules**
 | 方法 | 路径 | 说明 |

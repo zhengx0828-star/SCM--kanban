@@ -97,12 +97,12 @@ export function useDeleteShareRecord() {
   });
 }
 
-/** Excel 导入 */
+/** Excel 导入（浏览器「选择文件」上传，方式与供需管理一致） */
 export function useImportShare() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ projectId, month, filePath }: { projectId: number; month: string; filePath: string }) =>
-      shareApi.importExcel(projectId, month, filePath),
+    mutationFn: ({ projectId, month, file }: { projectId: number; month: string; file: File }) =>
+      shareApi.importExcel(projectId, month, file),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shareKeys.all });
     },

@@ -114,7 +114,7 @@ export function useChangeArchives(projectId?: number) {
 export function useImportChanges() {
   const invalidate = useInvalidateAll();
   return useMutation({
-    mutationFn: (filePath: string) => changeApi.import(filePath),
+    mutationFn: (file: File) => changeApi.import(file),
     onSuccess: invalidate,
   });
 }

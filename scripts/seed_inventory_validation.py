@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import openpyxl  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import InventoryDay, InventoryPlan  # noqa: E402
-from app.routers.inventory import import_inventory  # noqa: E402
+from app.routers.inventory import import_inventory_from_path  # noqa: E402
 
 CLEAR = "--clear" in sys.argv
 
@@ -91,7 +91,7 @@ def main() -> None:
 
     tmp = os.path.join(tempfile.gettempdir(), "inv_seed.xlsx")
     build_xlsx(tmp)
-    res = import_inventory(file_path=tmp, db=db)
+    res = import_inventory_from_path(tmp, db)
     db.close()
     print(f"导入完成：新增 {res.imported}，更新 {res.updated}，错误 {len(res.errors)}")
     for e in res.errors:

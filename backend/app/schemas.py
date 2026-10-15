@@ -974,6 +974,8 @@ class ChangeCreate(BaseModel):
 class ChangeUpdate(BaseModel):
     """部分更新（PATCH）。注意：plan_start / plan_end 由叶子任务汇总，不接受手改。"""
 
+    project_id: Optional[int] = Field(None, ge=1, description="改归属项目（改后统计自动归到新项目）")
+    material_id: Optional[int] = Field(None, ge=1, description="改关联物料（一张单一个物料）")
     change_type_id: Optional[int] = Field(None, ge=1)
     supplier_id: Optional[int] = Field(None, ge=1)
     title: Optional[str] = Field(None, min_length=1, max_length=200)
