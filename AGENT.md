@@ -32,7 +32,7 @@
 | 前端依赖 | `frontend\node_modules\`（已装） |
 | 数据库 | `backend\products.db`（业务数据，**不进 git**） |
 | 端口 | 后端 8000 / 前端 5173 |
-| Git | 已初始化，master 分支，初始提交 `2fddd53` |
+| Git | `master` 分支，`origin` = `https://github.com/zhengx0828-star/SCM--kanban.git`（凭证已就位，可直接 `git push`）｜**git 只在 WorkBuddy 自带 PortableGit 中、未加系统 PATH**（2026-10-14 核实） |
 
 **功能模块**：Dashboard、供需管理、份额管理、库存管理（信号塔）、主数据（供应商/物料/供应关系/项目）、规则手册。API 全量清单见 `README.md`「十一、API 概览」。
 
@@ -122,7 +122,13 @@ git log --oneline origin/master..master   # 看本地领先远程多少提交
 
 **推送前必读（2026-09-17 实测查清：GitHub 完全可达，是 git 的默认 TLS 后端在本机卡死）**：
 
-本机有三个隐形障碍，**决定性因素是第 3 条**，三个都处理才能稳定连通：
+> **★ 2026-10-14 复测更新 —— 先看这一段，下面三条只在出问题时当排查手册用**：
+> - **本机直连已不需 schannel workaround**：本目录此前**没有 `.git`**（GitHub 源码包快照），重新 `git init` 后**未设任何 `sslBackend` / `http.proxy` / `http.version`**，`git fetch` 与 `git push` 均**一次成功**。下方 1/2/3 三条**不是每次推送的前置步骤**。
+> - **认证已就绪**：GCM 2.9.0 已保存账号 `zhengx0828-star`，`git push origin master` 直接通。**下文「认证」段的旧结论（GCM 无凭证 / 沙箱里弹不出窗口 / 登录必须由用户在自己终端完成）全部作废**。
+> - **⚠️ git 不在系统 PATH**：本机**未独立安装 Git**（`C:\Program Files\Git` 不存在，机器级与用户级 PATH 均无 git 条目），git 与 GCM 只存在于 `%USERPROFILE%\.workbuddy\binaries\PortableGit\versions\<ver>\`。**所有 git 命令必须在 WorkBuddy 会话内执行**；在自己开的 PowerShell / cmd 里敲 `git` 会报「不是内部或外部命令」。
+> - **别再把这个目录当全新仓库推**：远程已有历史（`b5a3ee9`、`ef6c5cf`、`05916b8` …），正确做法是 `git fetch origin` 后在 `origin/master` 之上追加提交。
+
+本机有三个隐形障碍（**2026-09-17 实测**），**决定性因素是第 3 条**，三个都处理才能稳定连通：
 
 1. **沙箱代理**：环境变量里有 `http_proxy/https_proxy=http://127.0.0.1:55144`，该代理**到 GitHub 是不通的**（实测 `curl -x` 该代理 → `http=000`）。git 若走它必卡死 → 需 `http.proxy=` 置空。
 2. **fake-IP 域名**：`github.com` 被解析到 `198.18.0.22`（fake-IP 网段，本地 TUN 接管）。该 TUN 对 HTTP/2 不友好 → 需 `http.version=HTTP/1.1`。
@@ -144,7 +150,15 @@ git ls-remote --heads origin
 git -c http.sslBackend=schannel -c http.version=HTTP/1.1 -c http.proxy= ls-remote --heads origin
 ```
 
-**认证**：push 需要 GitHub 凭证。本机 Git Credential Manager 中**没有已保存凭证**（`git credential fill` 返回空），首次需在**本机终端**执行 push，在弹出的 GitHub 登录窗口完成授权，凭证存入 Windows 凭据管理器后即无需重复。**headless / 沙箱会话里 GCM 弹不出交互窗口，登录这一步只能由用户在自己终端完成。**
+**认证（2026-10-14 修正，旧结论已作废）**：push 需要 GitHub 凭证。本机 GCM 2.9.0 **已保存凭证**（账号 `zhengx0828-star`，落在 Windows 凭据管理器），`git push origin master` 直接通，**无需 PAT、不会再弹授权窗口**。
+
+> ~~旧结论：「本机 Git Credential Manager 中没有已保存凭证（`git credential fill` 返回空），首次需在本机终端执行 push 完成授权」「headless / 沙箱会话里 GCM 弹不出交互窗口，登录这一步只能由用户在自己终端完成」~~ —— 2026-10-14 实测**两条均不成立**：在 WorkBuddy 会话内直接执行 `git credential-manager github login` 即完成 OAuth 授权并把凭证落库。
+>
+> 凭证失效时的自检与重授权（WorkBuddy 会话内）：
+> ```powershell
+> git credential-manager github list    # 应列出 zhengx0828-star；为空即需重登
+> git credential-manager github login   # 重走一次 OAuth
+> ```
 
 > 诊断要点（下次再遇到「git 连不上但 curl 正常」照此排查）：
 > ① `curl --noproxy '*' -I https://github.com` 通 → 网络没问题，问题在 git 自身；
@@ -665,7 +679,8 @@ python scripts/_tmp/fp_check.py diff      # 退出码非 0 = 有残留
 
 | 日期 | 源 | 是否可用 | 备注 |
 | --- | --- | --- | --- |
-| 2026-09-17 | github.com (443) | ✅ **通** | 根因查明：git 默认 `sslBackend=openssl` 在本机 fake-IP(198.18.0.22) 网络下 TLS 握手卡死。改 `http.sslBackend=schannel` + `http.version=HTTP/1.1` + `http.proxy=` 后裸命令秒回 `refs/heads/master`；`curl --noproxy '*' https://github.com` → `http=200`(0.4s)。**详见「2.5 推送前必读」** |
+| **2026-10-14** | **github.com (443)** | ✅ **直连即通，无需任何 workaround** | 本目录此前无 `.git`（GitHub 源码包快照），`git init` 后**未设 `sslBackend`/`http.proxy`/`http.version`**，`git fetch` + `git push` 一次成功，`b5a3ee9..0b10318 master -> master`。同时 GCM 完成 `github login`，凭证落库后可裸 `git push`。**详见「2.5 推送前必读」的 2026-10-14 更新** |
+| 2026-09-17 | github.com (443) | ✅ **通** | 根因查明：git 默认 `sslBackend=openssl` 在本机 fake-IP(198.18.0.22) 网络下 TLS 握手卡死。改 `http.sslBackend=schannel` + `http.version=HTTP/1.1` + `http.proxy=` 后裸命令秒回 `refs/heads/master`；`curl --noproxy '*' https://github.com` → `http=200`(0.4s)。**详见「2.5 推送前必读」**（注：该 workaround 在 2026-10-14 复测中已非必需） |
 | 2026-09-16 | github.com (443) | ❌ 误判为不通 | 当时裸 `git ls-remote`（openssl + 走沙箱代理 + HTTP/2）25s 超时、`curl` 未加 `--noproxy` 得 `http=000`。**根因已在 2026-09-17 查明** |
 | | registry.npmjs.org | | |
 | | registry.npmmirror.com | | |

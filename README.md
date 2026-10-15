@@ -13,8 +13,8 @@
 | 模块 | 页面 | 说明 |
 | --- | --- | --- |
 | Dashboard | `/dashboard` | 汇总概览（纯 summary，只展示真实录入数据，联动份额波动 / 重点独供统计） |
-| 供需管理 | `/supply-demand` | 项目级客户需求（1-12 月）、供应商产能、BOM 用量系数、供需平衡分析 |
-| 项目供需明细 | `/supply-demand/projects/:projectId` | 项目下的供应明细、关联物料/供应商，录入需求 / 产能 / BOM 系数 |
+| 供需管理 | `/supply-demand` | 项目级客户需求（1-12 月）、供应商产能、BOM 用量系数、供需平衡分析。项目／物料双下拉筛选（物料支持 **0/N 多选**，勾选即时生效、面板不关闭）；**供应系数热力图**（行=物料 · 列=1-12 月，格子值 = 产能÷需求）+ 供需趋势柱·折线组合；需求与 BOM 的 Excel **双 sheet 导入**（`客户需求` / `物料BOM与产能`，模板可下载） |
+| 项目供需明细 | `/supply-demand/projects/:projectId` | 项目下的供应明细、关联物料/供应商，录入需求 / 产能 / BOM 系数；**四元组一行式快速新增**供应关系（自动建 L1 主数据并挂载到项目） |
 | 份额管理 | `/share` | 项目维度份额概览：KPI 卡 + 风险排行 + 份额×评分四象限 + 月末结转 |
 | 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（含基地配额列）+ 行内编辑/删除 + 基地拉线配置（动态基地列，bases 随行快照） |
 | 主数据 | `/materials` | 供应商 / 物料 / 供应关系 / 项目 统一管理页（含地图点位、风险等级） |
@@ -89,9 +89,13 @@
 ### 3.4 Git 状态
 
 - 仓库已推送到 GitHub：`https://github.com/zhengx0828-star/SCM--kanban.git`（origin，默认分支 `master`，本地已与远程建立追踪，增量同步迭代中）。
-- `runtime/`、`node_modules/`、`backend/products.db`、`.workbuddy/`、`.codebuddy/`、`*.db.bak-*`、`size_report.txt` 均已在 `.gitignore` 排除，**不进 git**（首次 clone 到内网后需按 6.1 方式 B 手动补拷 `runtime/`、`node_modules/`、`products.db` 这 3 项）。
-- **⚠️ 本机 git 需改 TLS 后端才能连上（2026-09-17 实测查清）**：根因是 git 默认 `sslBackend=openssl` 在本机 fake-IP 网络下 TLS 握手卡死；改为 `schannel` + `http.version=HTTP/1.1` + `http.proxy=`（三个都写进本仓库配置，已生效）后秒通，详见 9.5。仓库为 **public**，匿名可 clone，但 **push 需要凭证**；本机 Git Credential Manager 无已保存凭证，首次需在本机终端完成一次 GitHub 登录。
-- 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`（配置已固化，直接敲裸命令即可）。
+- `runtime/`、`node_modules/`、`backend/products.db`、`.workbuddy/`、`.codebuddy/`、`*.db.bak-*`、`*.bak-orig`、`*.bak`、`size_report.txt` 均已在 `.gitignore` 排除，**不进 git**（首次 clone 到内网后需按 6.1 方式 B 手动补拷 `runtime/`、`node_modules/`、`products.db` 这 3 项）。后两项为改写前的本地留档备份，不进版本库。
+- **⚠️ 本机 git 连 GitHub 的排查记录（2026-09-17 实测查清）**：当时根因是 git 默认 `sslBackend=openssl` 在本机 fake-IP 网络下 TLS 握手卡死；改为 `schannel` + `http.version=HTTP/1.1` + `http.proxy=`（三个曾写进本仓库配置）后秒通，详见 9.5。
+  **2026-10-14 复测：本机直连已不需该 workaround。** 该目录此前**没有 `.git`**（目录名 `SCM--kanban-master` 是 GitHub 源码包的命名规则、`runtime/` 缺失而 `node_modules/` 存在 → 应是按 6.1「方式 B」迁移过来但未保留 git 元数据）。重新 `git init` 后**未写任何 `sslBackend` / `http.proxy` 配置**，`fetch` 与 `push` 均一次成功。日后若再现握手卡死，按 9.5 重新排查即可。
+- 仓库为 **public**，匿名可 clone，但 **push 始终需要凭证**。
+- **✅ 凭证已就位（2026-10-14）**：本机 Git Credential Manager 2.9.0 已保存 GitHub 账号 `zhengx0828-star`（`git credential-manager github list` 可见，凭证落在 Windows 凭据管理器）。**此后 `git push origin master` 直接推，不再弹授权窗口、无需 PAT。** 换机器或凭证失效时，执行一次 `git credential-manager github login` 重新授权。
+- **⚠️ git 不在系统 PATH（2026-10-14 核实）**：本机未独立安装 Git，git 只在 WorkBuddy 自带 `PortableGit` 里。**所有 `git` 命令都需在 WorkBuddy 会话内执行**（详见 9.5）——在自己开的 PowerShell / cmd 里敲 `git` 会报「不是内部或外部命令」。
+- 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`（在 WorkBuddy 会话内直接敲裸命令即可）。
 
 ---
 
@@ -113,7 +117,7 @@
 
 ## 五、内网网络说明（重要）
 
-> 你的内网是**访问受限**而非完全断网：常见站点可能通也可能被阻断，**规则不透明，需要自己试探**。**2026-09-17 实测查清：本机 GitHub 完全可达，此前「不可达」是 git 默认 TLS 后端（openssl）在本机 fake-IP 网络下握手卡死所致，改用 schannel 即通（见 9.5）**。本项目的设计原则是：**默认离线可跑，需要联网时按「第八节」逐级尝试**。
+> 你的内网是**访问受限**而非完全断网：常见站点可能通也可能被阻断，**规则不透明，需要自己试探**。**2026-09-17 实测查清：本机 GitHub 完全可达，此前「不可达」是 git 默认 TLS 后端（openssl）在本机 fake-IP 网络下握手卡死所致，改用 schannel 即通（见 9.5）；2026-10-14 复测直连已无需该 workaround，且 push 凭证已就位（见 3.4）**。本项目的设计原则是：**默认离线可跑，需要联网时按「第八节」逐级尝试**。
 
 - **拷贝进内网后，无需任何网络即可启动 Demo**（`runtime/` + `node_modules/` 自带）。
 - 只有当你要**拉取新依赖 / clone GitHub 仓库**时才需要网络。
@@ -350,8 +354,10 @@ cd scm-kanban
 git status                # 先看改了哪些文件
 git add -A
 git commit -m "描述本次改动"
-git push                  # 外网推送到 GitHub（本机不可用时走 9.5 bundle 中转）
+git push                  # 推送到 GitHub（凭证已就位，直接通；通道确实不通时走 9.5 bundle 中转）
 ```
+
+> **⚠️ 前提**：以上命令要求 `git` 在当前终端的 PATH 上。**本机 git 只在 WorkBuddy 自带 `PortableGit` 里、未加系统 PATH**（见 3.4 / 9.5），因此这些命令**要在 WorkBuddy 会话内执行**；在自己开的 PowerShell 里敲 `git` 会报「不是内部或外部命令」。内网机器若装了 Git for Windows，则可直接在本机终端执行。
 
 ### 9.4 双向开发注意事项
 
@@ -389,7 +395,20 @@ git push  origin master
 
 > **诊断口诀**：`curl --noproxy '*' -I https://github.com` 通、但 git 卡死 → 不是网络问题，是 git 自身；再 `GIT_TRACE_CURL=1 git ls-remote origin`，停在 ClientHello 之后 → **换 schannel**。
 
-**认证**：push 需要 GitHub 凭证。本机 Git Credential Manager 中**没有已保存凭证**（`git credential fill` 返回空）。首次 push 需在**本机终端**执行，在弹出窗口完成 GitHub 登录授权，凭证存入 Windows 凭据管理器后无需重复。headless / 沙箱会话里 GCM 弹不出交互窗口，**登录这一步必须由用户在本机终端完成**。
+**认证（2026-10-14 更新：已解决，无需再手动登录）**：push 需要 GitHub 凭证。此前本机 GCM 中**无已保存凭证**；现已经由 `git credential-manager github login` 完成 OAuth 授权，账号 `zhengx0828-star` 存入 Windows 凭据管理器，**之后 `git push origin master` 直接通**。
+
+> **作废一条旧结论**：原文写「headless / 沙箱会话里 GCM 弹不出交互窗口，登录这一步必须由用户在本机终端完成」——2026-10-14 实测**不成立**：在 WorkBuddy 会话内直接执行 `git credential-manager github login` 即完成授权并把凭证落库，无需另开本机终端。
+>
+> **⚠️ 本机 git 不在系统 PATH 上（2026-10-14 核实）**：本机**没有**独立安装 Git for Windows（`C:\Program Files\Git` 不存在），PATH（机器级 / 用户级）中也没有任何 git 条目。git 与 GCM 只存在于 WorkBuddy 自带运行时：
+> `%USERPROFILE%\.workbuddy\binaries\PortableGit\versions\<ver>\`
+> ——**只有在 WorkBuddy 会话内**（它会把 `mingw64\bin` 注入 PATH）才能直接敲 `git`；在自己打开的 PowerShell / cmd 里敲 `git` 会报「不是内部或外部命令」。两个选择：① 直接在 WorkBuddy 会话里让 AI 推送；② 把上述 `PortableGit\versions\<ver>\cmd` 加进用户 PATH（或改用完整路径）。
+>
+> **换机器 / 凭证失效时的自检与重授权**（在 WorkBuddy 会话内执行）：
+> ```powershell
+> git credential-manager github list    # 应列出 zhengx0828-star；为空即需重新登录
+> git credential-manager github login   # 重新走一次 OAuth
+> git push origin master                # 之后裸命令即可
+> ```
 
 > 仓库当前为 **public**（`zhengx0828-star/SCM--kanban`，默认分支 `master`），匿名可 fetch/clone；但 push 始终需要凭证。
 
@@ -427,15 +446,22 @@ scm-kanban/
 │   ├── src/
 │   │   ├── pages/                 # Dashboard / SupplyDemand / ProjectSupplyDetail /
 │   │   │                          #   Share / ShareRecords / Inventory / SupplierMaster / Products / Rules
-│   │   ├── components/            # 通用组件（MaterialDrawerFilter、EmptyState 等）
+│   │   ├── components/            # ui/（自研 MultiSelectDropdown 绝对定位面板，避开 radix 浮层在 dev 下的错位）
+│   │   │                          #   + projects/（SupplyCoefHeatmap 供应系数热力图、
+│   │   │                          #     DemandExcelImportDialog 需求/BOM 双 sheet 导入、
+│   │   │                          #     QuickAddRelationDialog 四元组快速新增）
+│   │   │                          #   + charts/（ChinaMap）、suppliers/、通用件（MaterialDrawerFilter、EmptyState 等）
 │   │   │                          #   + share/（四象限、导入、录入弹窗）
 │   │   │                          #   + inventory/（Excel 导入弹窗）
 │   │   ├── hooks/                 # TanStack Query 数据层（含 use-share / use-inventory）
-│   │   ├── lib/                   # api 封装、工具函数
+│   │   ├── lib/                   # api 封装、工具函数；
+│   │   │                          #   supply-risk（供需系数三档判定与聚合，纯函数）、
+│   │   │                          #   supplier-map-points（同坐标散点确定性环形展开 / >8 家聚合成计数气泡，纯函数）
 │   │   └── types/                 # 类型定义（含 share / inventory）
 │   └── package.json / vite.config.ts / tsconfig.json / components.json
 ├── scripts/                       # start-{backend,frontend}.{bat,sh}（.bat 为 GBK 编码，勿按 UTF-8 改）、
-│                                  #   gen_source_docx.py、seed_{share,inventory}_validation.py（验证种子，幂等可重跑）
+│                                  #   gen_source_docx.py、seed_{share,inventory}_validation.py（验证种子，幂等可重跑）、
+│                                  #   verify_{supply_demand_page,map_points,supply_risk}.mjs（CDP 常驻验收脚本）
 ├── docs/                          # 截图、opencode-reproduce-prompt.md（AI 复现提示词）
 └── README.md / AGENT.md
 ```
@@ -482,6 +508,7 @@ scm-kanban/
 | PATCH | `/api/projects/{id}/relations/{link_id}` | 明细行更新（含 demand / capacity / bom_factor 等扩展字段） |
 | PUT | `/api/projects/{id}/demand` | 批量维护客户需求（项目级，同步全项目明细） |
 | PUT | `/api/projects/{id}/bom` | 批量维护某物料 BOM 系数（项目×物料，同步该物料各行） |
+| GET | `/api/projects/demand-import-template` | 下载供需管理 Excel 导入模板（双 sheet：`客户需求` + `物料BOM与产能`） |
 | DELETE | `/api/projects/{id}/relations/{link_id}` | 解除项目-供应关系 |
 
 **份额管理 share**
@@ -539,6 +566,9 @@ scm-kanban/
 | 内网迁移后启动失败 | 确认 `runtime/` 和 `node_modules/` 已完整拷贝。详见 `AGENT.md` |
 | 内网某个源访问不了 | 换同类型另一镜像源（见 8.2 优先级），先用 8.1 探测 |
 | 内网外网改动冲突 | 双向开发纪律：先 `git pull` 再改；push 前看 `git status`。详见 9.4 |
+| 敲 `git` 报「不是内部或外部命令」 | 本机 git 未装进系统 PATH，只在 WorkBuddy 自带 `PortableGit` 里。**在 WorkBuddy 会话内执行 git 命令**，或把 `%USERPROFILE%\.workbuddy\binaries\PortableGit\versions\<ver>\cmd` 加进用户 PATH。详见 3.4 / 9.5 |
+| `git push` 要求输入用户名 / 密码，或报 `could not read Username` | 本机凭据失效。执行 `git credential-manager github list` 自检，为空则 `git credential-manager github login` 重新授权；凭据正常后裸 `git push origin master` 即可。详见 3.4 / 9.5 |
+| 项目目录里没有 `.git`，`git status` 报 `not a git repository` | 该目录是 GitHub **源码包快照**（或按 6.1「方式 B」迁移时未保留 git 元数据）。补做：`git init` → `git remote add origin <仓库地址>` → `git fetch origin` → 追加提交 → `git push`。**不要当空白仓库强推覆盖远程历史**，详见 3.4 |
 | 想用 AI 从零复现项目 | 参考 `docs/opencode-reproduce-prompt.md`，粘贴给 AI 编程助手即可 |
 
 ---
