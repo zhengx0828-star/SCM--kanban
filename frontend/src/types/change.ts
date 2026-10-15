@@ -443,11 +443,13 @@ export function changeDotClass(c: Pick<Change, "status" | "overdue_leaf" | "near
   return "bg-muted-foreground/30";
 }
 
-/** 项目卡边框：有超期红边 / 只有临期黄边 / 正常灰边 */
+/** 项目卡边框信号：有超期红边 / 只有临期黄边 / 正常灰边。
+ *  ★ 用 ring 而非 border：卡片统一走 `<Card>`（`ring-1 ring-foreground/10`），
+ *    信号色要覆盖这条 ring，否则红/黄边会被灰 ring 盖掉。 */
 export function projectCardClass(o: Pick<ChangeProjectOverview, "overdue_changes" | "near_changes">): string {
-  if (o.overdue_changes > 0) return "border-red-500/60";
-  if (o.near_changes > 0) return "border-amber-500/60";
-  return "border-border";
+  if (o.overdue_changes > 0) return "ring-red-500/60";
+  if (o.near_changes > 0) return "ring-amber-500/60";
+  return "";
 }
 
 /** 超期天数显示文案（≤ 0 返回 null） */

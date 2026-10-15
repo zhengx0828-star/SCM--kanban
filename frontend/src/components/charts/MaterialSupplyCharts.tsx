@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
+import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
+import { CHART_PALETTE } from "@/lib/chart-palette";
 
 /**
  * 物料供需组合图（echarts line + bar）。
@@ -14,17 +16,6 @@ import { useTheme } from "@/lib/theme";
  */
 
 const MONTHS = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
-
-/** 物料需求 line 调色板（多物料区分） */
-const DEMAND_COLORS = [
-  "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6",
-  "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6",
-] as const;
-/** 供应商产能 bar 调色板（多供应商区分；绿调为主，区别于需求 line） */
-const CAPACITY_COLORS = [
-  "#10b981", "#22c55e", "#84cc16", "#a3e635", "#06b6d4",
-  "#0ea5e9", "#14b8a6", "#facc15", "#fb923c", "#fbbf24",
-] as const;
 
 export interface MaterialDemandPoint {
   pn: string;
@@ -147,12 +138,12 @@ function buildComboOption(
         ...visibleDemand.map((d, idx) => ({
           name: `需求 · ${d.pn}`,
           icon: "rect",
-          itemStyle: { color: d.color || DEMAND_COLORS[idx % DEMAND_COLORS.length] },
+          itemStyle: { color: d.color || CHART_PALETTE[idx % CHART_PALETTE.length] },
         })),
         ...capacity.map((c, idx) => ({
           name: `产能 · ${c.name}`,
           icon: "rect",
-          itemStyle: { color: c.color || CAPACITY_COLORS[idx % CAPACITY_COLORS.length] },
+          itemStyle: { color: c.color || CHART_PALETTE[(idx + 5) % CHART_PALETTE.length] },
         })),
       ],
     },
@@ -187,7 +178,7 @@ function buildComboOption(
         symbol: "circle",
         symbolSize: 5,
         data: d.demandSeries,
-        lineStyle: { width: 2, color: d.color || DEMAND_COLORS[idx % DEMAND_COLORS.length] },
+        lineStyle: { width: 2, color: d.color || CHART_PALETTE[idx % CHART_PALETTE.length] },
         itemStyle: { color: d.color },
         z: 5,
       })),
@@ -200,7 +191,7 @@ function buildComboOption(
         barMaxWidth: 22,
         data: c.capacitySeries,
         itemStyle: {
-          color: c.color || CAPACITY_COLORS[idx % CAPACITY_COLORS.length],
+          color: c.color || CHART_PALETTE[(idx + 5) % CHART_PALETTE.length],
           borderRadius: idx === capacity.length - 1 ? [3, 3, 0, 0] : 0,
         },
       })),
@@ -220,7 +211,7 @@ export function MaterialSupplyCharts({
 }: MaterialSupplyChartsProps) {
   const empty = demand.length === 0 && capacity.length === 0;
   return (
-    <div className="rounded-md border bg-card">
+    <Card className="gap-0 p-0">
       <div className="border-b px-4 py-2 text-xs font-medium text-muted-foreground">
         物料需求（折线）+ 供应商产能（柱状）· 组合图
       </div>
@@ -233,7 +224,7 @@ export function MaterialSupplyCharts({
           <ComboChart demand={demand} capacity={capacity} />
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -281,5 +272,3 @@ function ComboChart({
 
   return <div ref={ref} className={cn("h-full w-full")} />;
 }
-
-export { DEMAND_COLORS, CAPACITY_COLORS };

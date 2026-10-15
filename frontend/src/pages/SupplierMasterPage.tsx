@@ -849,7 +849,7 @@ export default function SupplierMasterPage() {
           <div className="mx-auto max-w-6xl">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 className="text-4xl font-semibold tracking-tight">供应商列表</h1>
+                <h1 className="text-2xl font-semibold tracking-tight">供应商列表</h1>
                 <p className="mt-2 max-w-2xl text-muted-foreground">
                   先有项目，再有物料（PN + 名称），再为物料添加供应商（名称 + 代码），
                   形成四元组供其他模块调用。

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
+import { CHART_PALETTE } from "@/lib/chart-palette";
 
 /**
  * 客户需求 1-12 月折线图（ECharts 渲染）。
@@ -11,24 +12,10 @@ import { useTheme } from "@/lib/theme";
  * - 主题感知（light/dark）
  * - 主题变更时整图重建；数据/显隐变更时仅增量更新 series（按 id 合并），保证交互流畅
  *
- * 注意：颜色按 selectedProjectIds 顺序循环取 LINE_COLORS，避免数量多时颜色重复。
+ * 注意：颜色按 selectedProjectIds 顺序循环取 CHART_PALETTE（全站唯一分类色板），避免数量多时颜色重复。
  */
 
 const MONTHS = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
-
-/** 折线系列调色板（≥ 8 个项目足够区分；>8 时循环复用，与 chip 颜色一致） */
-const LINE_COLORS = [
-  "#3b82f6", // blue-500
-  "#10b981", // emerald-500
-  "#f59e0b", // amber-500
-  "#ef4444", // red-500
-  "#8b5cf6", // violet-500
-  "#06b6d4", // cyan-500
-  "#ec4899", // pink-500
-  "#84cc16", // lime-500
-  "#f97316", // orange-500
-  "#14b8a6", // teal-500
-] as const;
 
 /** 项目描述（一个系列 = 一条线） */
 export interface DemandProjectSeries {
@@ -38,7 +25,7 @@ export interface DemandProjectSeries {
   code: string;
   /** 项目名（用于 chip 文字） */
   name: string;
-  /** 颜色（来自 LINE_COLORS 之一） */
+  /** 颜色（来自 CHART_PALETTE 之一） */
   color: string;
   /** 1-12 月需求；长度为 12 或 null（null = 未录入，本项目不画线） */
   demand: number[] | null;
@@ -217,7 +204,7 @@ export function DemandLineChart({ className, series }: DemandLineChartProps) {
   return <div ref={ref} className={cn("h-full w-full", className)} />;
 }
 
-/** 把项目扁平化成"含颜色"的 series（chip 也复用 LINE_COLORS） */
+/** 把项目扁平化成"含颜色"的 series（chip 也复用 CHART_PALETTE） */
 export function buildDemandSeries(
   projects: Array<{ id: number; code: string; name: string; demand: number[] | null }>,
   selectedIds: Set<number>
@@ -226,7 +213,7 @@ export function buildDemandSeries(
     projectId: p.id,
     code: p.code,
     name: p.name,
-    color: LINE_COLORS[idx % LINE_COLORS.length],
+    color: CHART_PALETTE[idx % CHART_PALETTE.length],
     demand: p.demand ?? null,
     visible: selectedIds.has(p.id),
   }));
@@ -236,5 +223,3 @@ export function buildDemandSeries(
 export function colorOf(series: DemandProjectSeries[], projectId: number): string {
   return series.find((s) => s.projectId === projectId)?.color ?? "#64748b";
 }
-
-export { LINE_COLORS };

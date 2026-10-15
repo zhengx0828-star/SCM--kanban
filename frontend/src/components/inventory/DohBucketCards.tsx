@@ -82,22 +82,23 @@ export function DohBucketCards({ buckets, active, onToggle, totalRows }: Props) 
             }}
             className={cn(
               "relative cursor-pointer overflow-hidden p-4 transition-all hover:shadow-sm",
-              meta.cardCls,
               isActive && "ring-2 ring-primary ring-offset-1"
             )}
             title={`${meta.label}（${meta.desc}）\n点击只看这一档；已选可再点取消（可多选）`}
           >
-            {/* 顶部色条：色觉之外的第二重编码 */}
+            {/* 顶部色条：全卡唯一强色（v1.4 统一：不再整卡铺底色） */}
             <span className={cn("absolute inset-x-0 top-0 h-[3px]", meta.bar)} />
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="flex items-center gap-1 text-xs text-muted-foreground">
                   <span className="truncate">{meta.label}</span>
                 </p>
-                <p className={cn("mt-1.5 text-3xl font-semibold tabular-nums leading-none", meta.textCls)}>
+                <p className="mt-1.5 text-2xl font-semibold tabular-nums leading-none text-foreground">
                   {count}
                 </p>
-                <p className="mt-1.5 text-[10px] leading-tight text-muted-foreground/80">{meta.desc}</p>
+                <p className="mt-1.5 truncate text-xs text-muted-foreground" title={`${meta.desc} · ${meta.hint}`}>
+                  {meta.desc}
+                </p>
               </div>
               <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", meta.chipCls)}>
                 <Icon className="h-4 w-4" />
@@ -107,7 +108,7 @@ export function DohBucketCards({ buckets, active, onToggle, totalRows }: Props) 
             <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
               <span className={cn("block h-full rounded-full", meta.bar)} style={{ width: `${pct}%` }} />
             </div>
-            <p className="mt-1.5 truncate text-[10px] text-muted-foreground" title={hint}>
+            <p className="mt-1.5 truncate text-xs text-muted-foreground" title={hint}>
               {hint}
             </p>
           </Card>

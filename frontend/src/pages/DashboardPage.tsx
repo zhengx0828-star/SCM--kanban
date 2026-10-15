@@ -38,6 +38,8 @@ interface StatItem {
   hint: string;
   icon: LucideIcon;
   chip: string;
+  /** 顶部 3px 色条（对齐库存 DohBucketCards / 供需 KpiCard 的基准；与 chip 同语义色） */
+  bar: string;
   /** 副标语气：有超期 → 红、只有临期 → 黄、其余灰 */
   hintTone?: "danger" | "warn";
   onClick?: () => void;
@@ -65,6 +67,7 @@ function buildUrgentInventoryStat(
     hint: "已断货 / 紧急，需立即补货 · 点击查看明细",
     icon: Timer,
     chip: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    bar: "bg-amber-500",
     onClick: () => goInventory("stockout,urgent", urgentProjectIds),
   };
 }
@@ -91,7 +94,8 @@ function buildChangesStat(summary: ChangeSummary | undefined, goChanges: () => v
     hint: empty ? "暂无变更" : `超期 ${overdue} · 临期 ${near} · 点击查看`,
     hintTone: overdue > 0 ? "danger" : near > 0 ? "warn" : undefined,
     icon: GitPullRequestArrow,
-    chip: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+    chip: "bg-primary/10 text-primary",
+    bar: "bg-primary",
     onClick: goChanges,
   };
 }
@@ -228,6 +232,7 @@ export default function DashboardPage() {
         hint: "在管项目 / 物料种类",
         icon: FolderKanban,
         chip: "bg-primary/10 text-primary",
+        bar: "bg-primary",
       },
       {
         label: "份额波动物料",
@@ -235,6 +240,7 @@ export default function DashboardPage() {
         hint: shareStats?.month ? `${shareStats.month} 波动：相对上月变化 ≥ ±30%` : "暂无份额数据",
         icon: TrendingUp,
         chip: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        bar: "bg-emerald-500",
         onClick: () =>
           navigate(shareStats?.month ? `/share?risk=fluctuation&month=${shareStats.month}` : "/share"),
       },
@@ -244,6 +250,7 @@ export default function DashboardPage() {
         hint: shareStats?.month ? `${shareStats.month} 独供物料` : "暂无份额数据",
         icon: ShieldAlert,
         chip: "bg-red-500/10 text-red-600 dark:text-red-400",
+        bar: "bg-red-500",
         onClick: () =>
           navigate(shareStats?.month ? `/share?risk=sole&month=${shareStats.month}` : "/share"),
       },
@@ -275,7 +282,7 @@ export default function DashboardPage() {
           <div className="mx-auto max-w-6xl">
             {/* 页头 */}
             <section id="overview" className="scroll-mt-20">
-              <h1 className="text-4xl font-semibold tracking-tight">Dashboard</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
               <p className="mt-2 text-muted-foreground">
                 供应链整体态势总览：关键指标、供应商分布与待办事项。
               </p>
@@ -286,12 +293,16 @@ export default function DashboardPage() {
               {stats.map((stat) => (
                 <Card
                   key={stat.label}
-                  className={stat.onClick ? "cursor-pointer transition-colors hover:border-primary/50" : undefined}
+                  className={cn(
+                    "relative",
+                    stat.onClick ? "cursor-pointer transition-colors hover:shadow-sm" : undefined
+                  )}
                   onClick={stat.onClick}
                 >
+                  <span className={cn("absolute inset-x-0 top-0 h-[3px]", stat.bar)} />
                   <CardContent className="flex flex-col gap-2 p-5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm text-muted-foreground">{stat.label}</span>
+                      <span className="truncate text-xs text-muted-foreground">{stat.label}</span>
                       <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", stat.chip)}>
                         <stat.icon className="h-4 w-4" />
                       </span>

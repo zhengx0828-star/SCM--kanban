@@ -15,7 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
-import { LINE_COLORS } from "@/components/charts/DemandLineChart";
+import { CHART_PALETTE } from "@/lib/chart-palette";
 import { MaterialDetailDialog } from "@/components/projects/MaterialDetailDialog";
 import { QuickAddRelationDialog } from "@/components/projects/QuickAddRelationDialog";
 import { DemandExcelImportDialog } from "@/components/projects/DemandExcelImportDialog";
@@ -263,7 +263,7 @@ export default function ProjectSupplyDetailPage() {
                         value: m.pn,
                         label: m.name,
                         sublabel: m.pn,
-                        color: LINE_COLORS[i % LINE_COLORS.length],
+                        color: CHART_PALETTE[i % CHART_PALETTE.length],
                         badge: (
                           <span className="flex shrink-0 items-center gap-1">
                             <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">

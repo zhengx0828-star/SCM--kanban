@@ -1,5 +1,7 @@
 import { Archive, ArchiveRestore, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { ChangeProjectOverview } from "@/types/change";
 import { projectCardClass } from "@/types/change";
@@ -36,7 +38,7 @@ export function ProjectChangeCard({ data: p, onOpen, onArchive, onUnarchive, arc
   const hasAnyChange = p.total + p.voided > 0;
 
   return (
-    <div
+    <Card
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -47,7 +49,7 @@ export function ProjectChangeCard({ data: p, onOpen, onArchive, onUnarchive, arc
         }
       }}
       className={cn(
-        "cursor-pointer rounded-xl border bg-card p-4 transition-all hover:shadow-sm",
+        "cursor-pointer p-4 transition-all hover:shadow-sm",
         projectCardClass(p)
       )}
     >
@@ -60,10 +62,10 @@ export function ProjectChangeCard({ data: p, onOpen, onArchive, onUnarchive, arc
           <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{p.project_code}</p>
         </div>
         {hasProblem && (
-          <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-400">
-            <AlertTriangle className="mr-0.5 inline h-3 w-3" />
+          <Badge variant="destructive" className="shrink-0">
+            <AlertTriangle className="mr-0.5 h-3 w-3" />
             {p.overdue_changes} 超期
-          </span>
+          </Badge>
         )}
       </div>
 
@@ -189,6 +191,6 @@ export function ProjectChangeCard({ data: p, onOpen, onArchive, onUnarchive, arc
           )
         )}
       </div>
-    </div>
+    </Card>
   );
 }

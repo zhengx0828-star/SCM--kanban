@@ -1,4 +1,5 @@
 import { INV_STATUS, type InventoryCell, type InventoryPlan } from "@/types/inventory";
+import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 /**
@@ -97,7 +98,7 @@ export function OrderTimingBar({ counts, irreversibleToday, noRisk, active, onSe
   const sum = TIMING_SEGMENTS.reduce((acc, s) => acc + (counts[s.bucket] ?? 0), 0);
 
   return (
-    <div className="rounded-lg border bg-card px-3 py-2.5">
+    <Card className="p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
           下单时机
@@ -141,6 +142,6 @@ export function OrderTimingBar({ counts, irreversibleToday, noRisk, active, onSe
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }

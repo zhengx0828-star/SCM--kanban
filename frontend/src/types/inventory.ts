@@ -91,7 +91,7 @@ export const INV_DOH_BUCKET_META: Record<
     cardCls: "border-red-300 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10",
     bar: "bg-red-700",
     textCls: "text-red-700 dark:text-red-400",
-    chipCls: "bg-red-700 text-white",
+    chipCls: "bg-red-500/10 text-red-600 dark:text-red-400",
     order: 0,
   },
   urgent: {
@@ -101,7 +101,7 @@ export const INV_DOH_BUCKET_META: Record<
     cardCls: "border-red-200 bg-red-50/70 dark:border-red-500/30 dark:bg-red-500/5",
     bar: "bg-red-500",
     textCls: "text-red-600 dark:text-red-400",
-    chipCls: "bg-red-500/15 text-red-700 dark:text-red-400",
+    chipCls: "bg-red-500/10 text-red-700 dark:text-red-400",
     order: 1,
   },
   low: {
@@ -111,7 +111,7 @@ export const INV_DOH_BUCKET_META: Record<
     cardCls: "border-amber-200 bg-amber-50/70 dark:border-amber-500/30 dark:bg-amber-500/5",
     bar: "bg-amber-400",
     textCls: "text-amber-700 dark:text-amber-400",
-    chipCls: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+    chipCls: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   order: 2,
   },
   ok: {
@@ -121,7 +121,7 @@ export const INV_DOH_BUCKET_META: Record<
     cardCls: "border-emerald-200 bg-emerald-50/70 dark:border-emerald-500/30 dark:bg-emerald-500/5",
     bar: "bg-emerald-500",
     textCls: "text-emerald-700 dark:text-emerald-400",
-    chipCls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+    chipCls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
     order: 3,
   },
   unknown: {

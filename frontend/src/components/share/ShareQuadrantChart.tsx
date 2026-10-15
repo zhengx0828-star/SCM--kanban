@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CHART_PALETTE } from "@/lib/chart-palette";
 import type { ShareQuadrantPoint } from "@/types/share";
 
 /**
@@ -129,7 +130,8 @@ export function ShareQuadrantChart({ points, loading }: Props) {
         {points.map((p, i) => {
           const r = radiusOf(p.lines);
           const isSole = p.is_sole;
-          const fill = isSole ? "#f87171" : "#60a5fa"; // red-400 / blue-400，暗色下也醒目
+          // 正常点 = 分类蓝（CHART_PALETTE[0]）；独供 = 红（状态语义，保留）
+          const fill = isSole ? "#f87171" : CHART_PALETTE[0]; // red-400 / 分类蓝，暗色下也醒目
           const stroke = isSole ? "#b91c1c" : "#2563eb"; // red-700 / blue-600
           const opacity = hover && hover !== p ? 0.35 : 1;
           return (
@@ -171,7 +173,7 @@ export function ShareQuadrantChart({ points, loading }: Props) {
       {/* 图例 */}
       <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-blue-400" /> 正常供应
+          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CHART_PALETTE[0] }} /> 正常供应
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-full bg-red-400" /> 独供

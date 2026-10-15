@@ -406,7 +406,7 @@ export default function InventoryPage() {
             {/* 标题栏 */}
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
               <div>
-                <h1 className="text-xl font-semibold tracking-tight">库存信号塔</h1>
+                <h1 className="text-2xl font-semibold tracking-tight">库存信号塔</h1>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   先选项目，再看物料 · 未来 30 天日度滚动推算 · 安全天数 = Z × COV × √LT（当前 Z={serviceZ}）
                   {hasProject && ` · 已选 ${projSel.size} 个项目`}

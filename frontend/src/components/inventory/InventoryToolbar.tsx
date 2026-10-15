@@ -1,5 +1,6 @@
 import { Download, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MultiSelectFilter, type MultiSelectOption } from "@/components/ui/multi-select-filter";
 import { cn } from "@/lib/utils";
@@ -76,7 +77,7 @@ export function InventoryToolbar({
   hasFilters,
 }: Props) {
   return (
-    <div className="space-y-3 rounded-lg border bg-card p-3">
+    <Card className="gap-0 space-y-3 p-3">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
         {/* 全局搜索（建议 A） */}
         <div className="relative min-w-[240px] flex-1">
@@ -123,6 +124,6 @@ export function InventoryToolbar({
           </Button>
         </div>
       </div>
-    </div>
+    </Card>
   );
 }

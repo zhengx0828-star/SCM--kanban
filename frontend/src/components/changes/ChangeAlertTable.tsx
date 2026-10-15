@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
@@ -196,9 +197,9 @@ export function ChangeAlertTable({
 
   if (items.length === 0) {
     return (
-      <div className="rounded-xl border bg-card py-8 text-center text-xs text-muted-foreground">
+      <Card className="gap-0 px-4 py-8 text-center text-xs text-muted-foreground">
         {emptyText ?? "没有超期或临期的任务，一切正常"}
-      </div>
+      </Card>
     );
   }
 
@@ -207,7 +208,7 @@ export function ChangeAlertTable({
   if (mode === "flat") {
     const flat = [...items].sort(compare);
     return (
-      <div className="overflow-hidden rounded-xl border bg-card">
+      <Card className="gap-0 p-0">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
@@ -263,7 +264,7 @@ export function ChangeAlertTable({
             ))}
           </TableBody>
         </Table>
-      </div>
+      </Card>
     );
   }
 
@@ -277,7 +278,7 @@ export function ChangeAlertTable({
           const isCollapsed = collapsed.has(g.projectId);
           const wMeta = alertLevelMeta(g.worst.level);
           return (
-            <div key={g.projectId} className="overflow-hidden rounded-lg border bg-card">
+            <Card key={g.projectId} className="gap-0 p-0">
               {/* 项目组头 */}
               <button
                 type="button"
@@ -366,7 +367,7 @@ export function ChangeAlertTable({
                     })}
                 </div>
               )}
-            </div>
+            </Card>
           );
         })}
       </div>

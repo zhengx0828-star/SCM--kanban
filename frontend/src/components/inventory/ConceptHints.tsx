@@ -702,9 +702,9 @@ function SafetyStockDiagram({ plan }: { plan: InventoryPlan }) {
         <span className="text-muted-foreground">需求波动档位</span>
         {(
           [
-            ["low", "低 < 0.35", "bg-emerald-500/15"],
-            ["mid", "中 0.35–0.8", "bg-amber-500/15"],
-            ["high", "高 ≥ 0.8", "bg-red-500/15"],
+            ["low", "低 < 0.35", "bg-emerald-500/10"],
+            ["mid", "中 0.35–0.8", "bg-amber-500/10"],
+            ["high", "高 ≥ 0.8", "bg-red-500/10"],
           ] as const
         ).map(([k, label, cls]) => (
           <span

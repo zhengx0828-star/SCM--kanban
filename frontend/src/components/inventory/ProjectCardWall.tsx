@@ -166,7 +166,7 @@ export function ProjectCardWall({
                 {urgentTotal > 0 && (
                   <Badge
                     variant="secondary"
-                    className="shrink-0 bg-red-500/15 text-[10px] font-medium text-red-700 dark:text-red-400"
+                    className="shrink-0 bg-red-500/10 text-[10px] font-medium text-red-700 dark:text-red-400"
                   >
                     <AlertTriangle className="mr-0.5 h-3 w-3" />
                     {urgentTotal}

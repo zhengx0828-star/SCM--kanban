@@ -172,34 +172,44 @@ interface StatTileProps {
   active?: boolean;
 }
 
-function StatTile({ label, value, hint, tone = "default", onClick, active }: StatTileProps) {
-  const toneCls =
-    tone === "red"
-      ? "text-red-600 dark:text-red-400"
-      : tone === "amber"
-        ? "text-amber-600 dark:text-amber-400"
-        : tone === "blue"
-          ? "text-blue-600 dark:text-blue-400"
-          : tone === "emerald"
-            ? "text-emerald-600 dark:text-emerald-400"
-            : "text-foreground";
+/** 统计卡顶部色条（对齐库存 DohBucketCards / 供需 KpiCard 的「顶部 3px 色条」基准） */
+const STAT_TONE_BAR: Record<string, string> = {
+  default: "bg-slate-400",
+  red: "bg-red-500",
+  amber: "bg-amber-500",
+  blue: "bg-blue-500",
+  emerald: "bg-emerald-500",
+};
 
+function StatTile({ label, value, hint, tone = "default", onClick, active }: StatTileProps) {
+  const bar = STAT_TONE_BAR[tone] ?? STAT_TONE_BAR.default;
   return (
-    <button
-      type="button"
-      disabled={!onClick}
+    <Card
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
       onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
       className={cn(
-        "rounded-xl border bg-card px-3.5 py-3 text-left transition-colors",
-        onClick && "cursor-pointer hover:border-primary/50",
-        active && "border-primary/60 bg-accent/40",
+        "relative gap-0 px-3.5 py-3 text-left transition-all",
+        onClick && "cursor-pointer hover:shadow-sm",
+        active && "bg-accent/40 ring-2 ring-primary ring-offset-1",
         !onClick && "cursor-default"
       )}
     >
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className={cn("mt-1 text-xl font-semibold tabular-nums", toneCls)}>{value}</p>
-      {hint && <p className="mt-0.5 text-[10px] text-muted-foreground">{hint}</p>}
-    </button>
+      <span className={cn("absolute inset-x-0 top-0 h-[3px]", bar)} />
+      <p className="truncate text-xs text-muted-foreground" title={label}>{label}</p>
+      <p className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{value}</p>
+      {hint && <p className="mt-1 truncate text-xs text-muted-foreground" title={hint}>{hint}</p>}
+    </Card>
   );
 }
 
@@ -696,7 +706,7 @@ export default function ChangesPage() {
   const titleBar = (
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">变更管理</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">变更管理</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
           承诺兑现追踪 · 进度按时间自动推算，勾选是人给的答案，两者之差即偏差
           {hasProject && (projectMeta || projectRow) && ` · 当前：${projectMeta?.name ?? projectRow?.project_name}`}

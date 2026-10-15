@@ -269,7 +269,7 @@ export function InventoryDetailSheet({
             ) : plan.replenish_qty != null ? (
               <RopTimingHint plan={plan}>
                 <span className="flex items-center gap-1.5">
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-red-600 dark:text-red-400">
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-600 dark:text-red-400">
                     <PackagePlus className="h-2.5 w-2.5" />
                   </span>
                   <span className="text-muted-foreground">建议补货</span>
@@ -301,7 +301,7 @@ export function InventoryDetailSheet({
               </RopTimingHint>
             ) : (
               <span className="flex items-center gap-1.5">
-                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                   <Check className="h-2.5 w-2.5" />
                 </span>
                 <span className="rounded bg-emerald-500/10 px-1.5 py-px font-medium text-emerald-600 dark:text-emerald-400">

@@ -1,3 +1,4 @@
+import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { MaterialRisk, RiskStatus } from "@/lib/supply-risk";
 
@@ -38,7 +39,7 @@ export function SupplyCoefHeatmap({
   className?: string;
 }) {
   return (
-    <div className={cn("overflow-hidden rounded-md border bg-card", className)}>
+    <Card className={cn("gap-0 p-0", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
         <div>
           <h3 className="text-xs font-medium">供应系数热力（行 = 物料 · 列 = 月份）</h3>
@@ -75,7 +76,7 @@ export function SupplyCoefHeatmap({
           ))}
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 

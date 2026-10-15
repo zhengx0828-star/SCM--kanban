@@ -1,3 +1,4 @@
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
@@ -35,7 +36,7 @@ export function ChangeListTable({ items, isLoading, onRowClick }: Props) {
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-card">
+    <Card className="gap-0 p-0">
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
@@ -120,6 +121,6 @@ export function ChangeListTable({ items, isLoading, onRowClick }: Props) {
           })}
         </TableBody>
       </Table>
-    </div>
+    </Card>
   );
 }

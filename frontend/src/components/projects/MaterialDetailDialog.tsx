@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useTheme } from "@/lib/theme";
@@ -440,7 +441,7 @@ export function MaterialDetailDialog({
 
         <div className="max-h-[80vh] space-y-5 overflow-y-auto pr-1">
           {/* BOM 用量系数 */}
-          <section className="rounded-lg border bg-card p-4">
+          <Card className="gap-0 p-4">
             <p className="mb-3 flex items-center gap-1.5 text-sm font-medium">
               <Boxes className="h-4 w-4 text-muted-foreground" />
               BOM 用量系数（1 台产品需要几个该物料）
@@ -483,11 +484,11 @@ export function MaterialDetailDialog({
                 </span>
               )}
             </div>
-          </section>
+          </Card>
 
           {/* 物料需求 + 供应商产能 双图并排 */}
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            <section className="rounded-lg border bg-card p-4">
+            <Card className="gap-0 p-4">
               <div className="mb-2 flex items-center justify-between">
                 <p className="flex items-center gap-1.5 text-sm font-medium">
                   <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: PALETTE.demand }} />
@@ -504,9 +505,9 @@ export function MaterialDetailDialog({
                 payload={materialDemandSeries}
                 height={200}
               />
-            </section>
+            </Card>
 
-            <section className="rounded-lg border bg-card p-4">
+            <Card className="gap-0 p-4">
               <div className="mb-2 flex items-center justify-between">
                 <p className="flex items-center gap-1.5 text-sm font-medium">
                   <Factory className="h-4 w-4 text-muted-foreground" />
@@ -542,11 +543,11 @@ export function MaterialDetailDialog({
                   height={200}
                 />
               )}
-            </section>
+            </Card>
           </div>
 
           {/* 供应商产能：每家供应商 12 月录入 */}
-          <section className="rounded-lg border bg-card p-4">
+          <Card className="gap-0 p-4">
             <div className="mb-3 flex items-center justify-between">
               <p className="flex items-center gap-1.5 text-sm font-medium">
                 <Factory className="h-4 w-4 text-muted-foreground" />
@@ -650,7 +651,7 @@ export function MaterialDetailDialog({
                 })}
               </div>
             )}
-          </section>
+          </Card>
         </div>
       </DialogContent>
     </Dialog>

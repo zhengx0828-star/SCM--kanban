@@ -192,7 +192,7 @@ export default function RulesPage() {
           <div className="mx-auto max-w-4xl">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 className="text-4xl font-semibold tracking-tight">规则</h1>
+                <h1 className="text-2xl font-semibold tracking-tight">规则</h1>
                 <p className="mt-2 max-w-2xl text-muted-foreground">
                   各模块的 SOP、Excel 导入规则、注意事项等；后续按你不同模块的需求慢慢补充。
                 </p>

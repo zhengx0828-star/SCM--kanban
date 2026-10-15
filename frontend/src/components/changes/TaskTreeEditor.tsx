@@ -205,7 +205,7 @@ export function TaskTreeEditor({ changeId, tasks, owners, disabled = false }: Pr
               <span
                 className={cn(
                   "shrink-0 rounded px-1.5 py-0.5 text-[10px]",
-                  allDone ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground"
+                  allDone ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground"
                 )}
               >
                 {node.leaf_done}/{node.leaf_total}

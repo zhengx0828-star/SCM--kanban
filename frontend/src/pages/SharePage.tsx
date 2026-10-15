@@ -156,7 +156,7 @@ export default function SharePage() {
           <div className="mx-auto max-w-7xl">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 className="text-4xl font-semibold tracking-tight">份额管理</h1>
+                <h1 className="text-2xl font-semibold tracking-tight">份额管理</h1>
                 <p className="mt-2 max-w-3xl text-muted-foreground">
                   按项目、按月快照各物料 × 供应商的份额与 QDC 评分，自动计算建议配额并识别独供 / 波动 / 偏差风险。
                 </p>
@@ -405,30 +405,26 @@ export default function SharePage() {
  *    显式浅色更稳（与 `INV_DOH_BUCKET_META.cardCls` 保持一致的做法）。
  * 值恒为 0 的卡也保留配色 —— 颜色表达「这类风险的严重度」，不是「有没有风险」。
  */
+/**
+ * KPI 卡状态色（v1.4 统一：白底 + 顶部色条为唯一强色，数字一律深色）。
+ * 原「整卡铺底色 + 数字变色」已随全站统一移除 —— 预警强度由顶部色条 + 浅色图标块承担。
+ */
 const KPI_TONES = {
   red: {
-    card: "border-red-300 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10",
     bar: "bg-red-600",
-    value: "text-red-700 dark:text-red-400",
-    chip: "bg-red-500/15 text-red-700 dark:text-red-400",
+    chip: "bg-red-500/10 text-red-700 dark:text-red-400",
   },
   amber: {
-    card: "border-amber-200 bg-amber-50/70 dark:border-amber-500/30 dark:bg-amber-500/5",
     bar: "bg-amber-400",
-    value: "text-amber-700 dark:text-amber-400",
-    chip: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+    chip: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   },
   violet: {
-    card: "border-violet-200 bg-violet-50/70 dark:border-violet-500/30 dark:bg-violet-500/5",
     bar: "bg-violet-400",
-    value: "text-violet-700 dark:text-violet-400",
-    chip: "bg-violet-500/15 text-violet-700 dark:text-violet-400",
+    chip: "bg-violet-500/10 text-violet-700 dark:text-violet-400",
   },
   blue: {
-    card: "border-blue-200 bg-blue-50/70 dark:border-blue-500/30 dark:bg-blue-500/5",
     bar: "bg-blue-400",
-    value: "text-blue-700 dark:text-blue-400",
-    chip: "bg-blue-500/15 text-blue-700 dark:text-blue-400",
+    chip: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
   },
 } as const;
 
@@ -446,10 +442,10 @@ function KpiCard({ label, value, loading, tone, sub, icon: Icon, onClick }: {
   const t = KPI_TONES[tone];
   return (
     <Card
-      className={cn("relative overflow-hidden", t.card, onClick && "cursor-pointer transition-all hover:shadow-sm")}
+      className={cn("relative overflow-hidden", onClick && "cursor-pointer transition-all hover:shadow-sm")}
       onClick={onClick}
     >
-      {/* 顶部色条：色觉之外的第二重编码（与库存页四卡一致） */}
+      {/* 顶部色条：全卡唯一强色（v1.4 统一） */}
       <span className={cn("absolute inset-x-0 top-0 h-[3px]", t.bar)} />
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2">
@@ -458,9 +454,9 @@ function KpiCard({ label, value, loading, tone, sub, icon: Icon, onClick }: {
             {loading ? (
               <Skeleton className="mt-1.5 h-7 w-12" />
             ) : (
-              <p className={cn("mt-1 text-2xl font-semibold tabular-nums", t.value)}>{value ?? 0}</p>
+              <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{value ?? 0}</p>
             )}
-            {sub && <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{sub}</p>}
+            {sub && <p className="mt-1 truncate text-xs text-muted-foreground" title={sub}>{sub}</p>}
           </div>
           <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", t.chip)}>
             <Icon className="h-4 w-4" />

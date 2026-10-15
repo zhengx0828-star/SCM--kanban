@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  AlertTriangle,
   Boxes,
   CalendarRange,
+  CheckCircle2,
   ChevronRight,
+  CircleDashed,
   Factory,
   FolderKanban,
   Inbox,
@@ -14,9 +17,10 @@ import {
 } from "lucide-react";
 import { useQueries } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
-import { DemandLineChart, buildDemandSeries, LINE_COLORS } from "@/components/charts/DemandLineChart";
+import { DemandLineChart, buildDemandSeries } from "@/components/charts/DemandLineChart";
 import { MaterialSupplyCharts } from "@/components/charts/MaterialSupplyCharts";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
 import { SupplyCoefHeatmap } from "@/components/projects/SupplyCoefHeatmap";
@@ -31,6 +35,7 @@ import {
   type SupplyRiskSummary,
 } from "@/lib/supply-risk";
 import { cn } from "@/lib/utils";
+import { CHART_PALETTE } from "@/lib/chart-palette";
 import type { Project, ProjectStatus } from "@/types/project";
 
 /**
@@ -94,7 +99,7 @@ export default function SupplyDemandPage() {
     () =>
       collectMaterials(detailRelations).map((x, i) => ({
         ...x,
-        color: LINE_COLORS[i % LINE_COLORS.length],
+        color: CHART_PALETTE[i % CHART_PALETTE.length],
       })),
     [detailRelations]
   );
@@ -162,7 +167,7 @@ export default function SupplyDemandPage() {
     }
     return Array.from(acc.values())
       .filter((s) => s.hasData)
-      .map((s, i) => ({ ...s, color: LINE_COLORS[i % LINE_COLORS.length] }));
+      .map((s, i) => ({ ...s, color: CHART_PALETTE[i % CHART_PALETTE.length] }));
   }, [detailRelations, selectedMaterials]);
 
   const overviewLoading = isLoading || overviewRelations.some((i) => i.isLoading);
@@ -185,7 +190,7 @@ export default function SupplyDemandPage() {
         <main className="min-w-0 flex-1 px-6 py-10 sm:px-8">
           <div className="mx-auto max-w-6xl">
             <section>
-              <h1 className="text-4xl font-semibold tracking-tight">供需管理</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">供需管理</h1>
               <p className="mt-2 text-muted-foreground">
                 一眼看风险：哪些物料会缺、什么时候开始缺；下方可展开明细逐项排查。
               </p>
@@ -403,8 +408,12 @@ function RiskOverview({ summary, loading }: { summary: SupplyRiskSummary; loadin
         />
         <KpiCard
           label="最严重缺口"
-          value={worst ? `${worst.worstMonthIndex + 1} 月 · ${worst.pn}` : "无"}
-          hint={worst ? `缺口占该月需求 ${Math.round(worst.worstGapRatio * 100)}%` : "全年产能均可覆盖需求"}
+          value={worst ? `${worst.worstMonthIndex + 1} 月` : "无"}
+          hint={
+            worst
+              ? `${worst.pn} · 缺口占该月需求 ${Math.round(worst.worstGapRatio * 100)}%`
+              : "全年产能均可覆盖需求"
+          }
           tone={worst ? "danger" : "ok"}
         />
         <KpiCard
@@ -431,41 +440,72 @@ function RiskOverview({ summary, loading }: { summary: SupplyRiskSummary; loadin
   );
 }
 
+/**
+ * KPI 状态映射（对齐库存 DohBucketCards 的「顶部 3px 色条 + 图标块」基准）：
+ *   色条 = 状态语义（红=危险/琥珀=警告/绿=正常/灰=未评估）
+ *   数字 = 统一深色 foreground（不再靠数字变色表达状态，避免满屏彩色数字）
+ */
+const KPI_TONE_META: Record<
+  "danger" | "warn" | "ok" | "muted",
+  { bar: string; chip: string; icon: React.ComponentType<{ className?: string }> }
+> = {
+  danger: {
+    bar: "bg-red-500",
+    chip: "bg-red-500/10 text-red-600 dark:text-red-400",
+    icon: AlertTriangle,
+  },
+  warn: {
+    bar: "bg-amber-500",
+    chip: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    icon: AlertTriangle,
+  },
+  ok: {
+    bar: "bg-emerald-500",
+    chip: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    icon: CheckCircle2,
+  },
+  muted: {
+    bar: "bg-slate-400",
+    chip: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
+    icon: CircleDashed,
+  },
+};
+
 function KpiCard({
   label,
   value,
   hint,
-  tone,
+  tone = "muted",
 }: {
   label: string;
   value: string;
   hint?: string;
   tone?: "danger" | "warn" | "ok" | "muted";
 }) {
-  const toneCls =
-    tone === "danger"
-      ? "text-rose-600 dark:text-rose-400"
-      : tone === "warn"
-        ? "text-amber-600 dark:text-amber-400"
-        : tone === "ok"
-          ? "text-emerald-600 dark:text-emerald-400"
-          : "text-foreground";
+  const meta = KPI_TONE_META[tone];
+  const Icon = meta.icon;
   return (
-    <Card>
-      <CardContent className="p-4">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p
-          className={cn("mt-1 truncate text-2xl font-semibold tracking-tight tabular-nums", toneCls)}
-          title={value}
-        >
-          {value}
-        </p>
-        {hint && (
-          <p className="mt-1 truncate text-[11px] text-muted-foreground" title={hint}>
-            {hint}
+    <Card className="relative overflow-hidden p-4">
+      <span className={cn("absolute inset-x-0 top-0 h-[3px]", meta.bar)} />
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground">{label}</p>
+          <p
+            className="mt-1.5 truncate text-2xl font-semibold tracking-tight tabular-nums text-foreground"
+            title={value}
+          >
+            {value}
           </p>
-        )}
-      </CardContent>
+          {hint && (
+            <p className="mt-1 truncate text-xs text-muted-foreground" title={hint}>
+              {hint}
+            </p>
+          )}
+        </div>
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", meta.chip)}>
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
     </Card>
   );
 }
@@ -649,10 +689,17 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
   const supplierCount = useMemo(() => new Set(relations.map((r) => r.supplier_code)).size, [relations]);
 
   return (
-    <button
-      type="button"
+    <Card
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className="group flex flex-col items-stretch gap-3 rounded-lg border bg-card p-5 text-left transition-all hover:border-primary/40 hover:shadow-sm"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="group cursor-pointer p-5 text-left transition-all hover:border-primary/40 hover:shadow-sm"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
@@ -664,19 +711,19 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
       </div>
 
-      <div className="flex items-center gap-2">
-        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusMeta.chip}`}>
+      <div className="mt-3 flex items-center gap-2">
+        <Badge variant="secondary" className={statusMeta.chip}>
           {statusMeta.label}
-        </span>
+        </Badge>
         {project.owner && <span className="text-xs text-muted-foreground">负责人：{project.owner}</span>}
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="mt-3 grid grid-cols-3 gap-2">
         <Stat icon={<Boxes className="h-3.5 w-3.5" />} label="物料" value={relationsLoading ? "—" : String(materialCount)} />
         <Stat icon={<Factory className="h-3.5 w-3.5" />} label="明细行" value={relationsLoading ? "—" : String(relations.length)} />
         <Stat icon={<CalendarRange className="h-3.5 w-3.5" />} label="供应商" value={relationsLoading ? "—" : String(supplierCount)} />
       </div>
-    </button>
+    </Card>
   );
 }
 

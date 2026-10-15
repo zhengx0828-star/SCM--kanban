@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Archive, ArchiveRestore, CheckCircle2, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -296,10 +297,10 @@ export function ChangeDetailSheet({ changeId, open, onOpenChange, onChanged }: P
                 </div>
               </div>
 
-              <div className="rounded-xl border bg-card p-3">
+              <Card className="gap-0 p-3">
                 <p className="mb-1 text-xs font-medium">燃尽（计划阶梯线 vs 实际线）</p>
                 <BurndownChart data={burndown} />
-              </div>
+              </Card>
             </div>
           ) : tab === "gantt" ? (
             <GanttChart

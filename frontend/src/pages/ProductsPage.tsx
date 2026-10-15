@@ -3,6 +3,7 @@ import { Plus, RefreshCw, Search } from "lucide-react";
 import { SiteHeader } from "@/components/site/SiteHeader";
 import { SiteSidebar } from "@/components/site/SiteSidebar";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -83,7 +84,7 @@ export default function ProductsPage() {
           <div className="mx-auto max-w-5xl">
             {/* 页头（文档站风格） */}
             <section id="overview" className="scroll-mt-20">
-              <h1 className="text-4xl font-semibold tracking-tight">产品管理</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">产品管理</h1>
               <p className="mt-2 text-muted-foreground">
                 管理产品列表、价格与库存信息，支持关键字搜索、状态筛选、分页与增删改。
               </p>
@@ -155,7 +156,7 @@ export default function ProductsPage() {
               </div>
 
               {/* 表格卡片（官网 Card 风格：圆角 + 细描边） */}
-              <div className="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+              <Card className="gap-0 p-0">
                 <ProductTable
                   data={data}
                   isLoading={isLoading}
@@ -172,7 +173,7 @@ export default function ProductsPage() {
                   total={data?.total ?? 0}
                   onPageChange={setPage}
                 />
-              </div>
+              </Card>
             </section>
           </div>
         </main>

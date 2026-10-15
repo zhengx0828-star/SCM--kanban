@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { GANTT_SUMMARY_COLOR, taskStateMeta, type TaskState } from "@/types/change";
 
@@ -265,22 +266,22 @@ export function GanttChart({ tasks, storageKey, onTaskClick, emptyText = "还没
 
   if (!tasks.length) {
     return (
-      <div className="rounded-xl border bg-card px-4 py-10 text-center text-xs text-muted-foreground">
+      <Card className="px-4 py-10 text-center text-xs text-muted-foreground">
         {emptyText}
-      </div>
+      </Card>
     );
   }
 
   if (!range) {
     return (
-      <div className="rounded-xl border bg-card px-4 py-10 text-center text-xs text-muted-foreground">
+      <Card className="px-4 py-10 text-center text-xs text-muted-foreground">
         任务还没有填计划时间，填上「计划开始 / 计划完成」后这里会画出甘特图
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-card">
+    <Card className="overflow-hidden">
       {/* ★ 甘特图天然是横向的，窄屏不能靠「压缩」适配：
           左侧标签列是固定 COL_W=260px，抽屉 / 手机下可用宽度只有 ~310px，
           右侧时间轴会被压到 ~50px —— 7 个刻度标签全部重叠成乱码（且不报错、不溢出，
@@ -414,17 +415,17 @@ export function GanttChart({ tasks, storageKey, onTaskClick, emptyText = "还没
                       {hasChildren ? (
                         <>
                           {issues.overdue > 0 && (
-                            <span className="shrink-0 rounded bg-red-500/15 px-1 text-[10px] font-medium text-red-700 dark:text-red-400">
+                            <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-medium text-red-700 dark:text-red-400">
                               {issues.overdue} 项超期
                             </span>
                           )}
                           {issues.overdue === 0 && issues.soon > 0 && (
-                            <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                            <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-medium text-amber-700 dark:text-amber-400">
                               {issues.soon} 项临期
                             </span>
                           )}
                           {issues.overdue === 0 && issues.soon === 0 && allDone && (
-                            <span className="shrink-0 rounded bg-emerald-500/15 px-1 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                            <span className="shrink-0 rounded bg-emerald-500/10 px-1 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
                               已完成
                             </span>
                           )}
@@ -440,17 +441,17 @@ export function GanttChart({ tasks, storageKey, onTaskClick, emptyText = "还没
                       ) : (
                         <>
                           {node.state === "overdue" && (
-                            <span className="shrink-0 rounded bg-red-500/15 px-1 text-[10px] font-medium text-red-700 dark:text-red-400">
+                            <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-medium text-red-700 dark:text-red-400">
                               超期{node.overdue_days}天
                             </span>
                           )}
                           {node.state === "soon" && (
-                            <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                            <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-medium text-amber-700 dark:text-amber-400">
                               临期
                             </span>
                           )}
                           {node.state === "late" && (
-                            <span className="shrink-0 rounded bg-orange-500/15 px-1 text-[10px] font-medium text-orange-700 dark:text-orange-400">
+                            <span className="shrink-0 rounded bg-orange-500/10 px-1 text-[10px] font-medium text-orange-700 dark:text-orange-400">
                               迟交{node.late_days}天
                             </span>
                           )}
@@ -537,6 +538,6 @@ export function GanttChart({ tasks, storageKey, onTaskClick, emptyText = "还没
       </div>
 
       {!ready && null}
-    </div>
+    </Card>
   );
 }

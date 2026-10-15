@@ -20,6 +20,7 @@
 | 主数据 | `/materials` | 供应商 / 物料 / 供应关系 / 项目 统一管理页（含地图点位、风险等级） |
 | 规则手册 | `/rules` | 项目 SOP 手册：业务规则与数据口径，按 module 分组 |
 | 库存管理 | `/inventory` | 库存信号塔：项目×基地×物料 推算单元，30 天日度 DOH 推算、动态安全库存、Excel 导入、行内手改重算、顶部风险时间漏斗四卡 |
+| 变更管理 | `/changes` | 变更单全生命周期：新建 / 作废 / 归档 + 多级任务树与自绘甘特图（任意层级折叠、超期红虚线、迟交复盘）+ 预警（超期 / 临期三级分组）+ 燃尽图 + 类型·状态·项目三饼图分析 + 负责人偏差排行 + Excel 双 sheet 导入导出；项目卡片墙按超期数排序、边框即信号（红边=超期 / 黄边=临期） |
 
 ---
 
@@ -39,12 +40,13 @@
 - React Hook Form + Zod 表单校验
 - ECharts 6（图表 + 中国地图）、next-themes（明暗主题）、sonner（toast）
 
-**数据库模型（三层八表，核心业务模型）**
+**数据库模型（三层主数据 + 各模块业务表，核心业务模型）**
 - L1 主数据：`projects` / `materials`（PN 唯一）/ `suppliers`（含 `risk_level` 地图风险等级，红/黄/绿/NULL=未评估）
 - L2 供应关系：`supply_relations`（material × supplier 唯一，四元组）
 - L3 项目明细：`project_supply_relations`（UNIQUE(project, supply_relation)，模块扩展字段 demand/capacity/bom_factor 等）
 - L3 份额管理：`share_records`（UNIQUE(project_id, supply_relation_id, month)，按月快照；份额/评分/建议配额/独供 + `bases` 基地快照 JSON `[{base, share, lines}]`，拉线数随记录自含。早期独立 `share_base_configs` 表已废弃，后端启动时自动 DROP）
 - L3 库存信号塔：`inventory_plans`（UNIQUE(project, base, material)，推算单元，存 lead_time/on_hand/hist_json/fcast_json）+ `inventory_days`（UNIQUE(plan, date)，只存人改过的日格：demand_override/manual_demand/manual_in/ending_override）
+- L3 变更管理：`change_types`（变更类型）+ `changes`（变更单，含 status 有效/作废、archived_at、完成率/时间进度/偏差等派生字段）+ `change_tasks`（多级任务树，叶子状态由后端按时间派生：todo/soon/overdue/done/late）+ `change_archives`（归档留痕）
 
 > 另有 `products`（历史遗留的通用 CRUD）与 `rules`（SOP 规则手册）两张辅助表。
 
@@ -452,10 +454,10 @@ scm-kanban/
 │   ├── app/
 │   │   ├── main.py                # 入口 + CORS + 自动建表
 │   │   ├── database.py            # SQLAlchemy 引擎与会话（DB 路径固定）
-│   │   ├── models.py              # 三层八表 ORM 模型（含 share_records / inventory_plans / inventory_days）
+│   │   ├── models.py              # 三层主数据 + 各模块业务表 ORM 模型（含 share_records / inventory_plans / changes 等）
 │   │   ├── schemas.py             # Pydantic v2 模式
-│   │   ├── routers/               # products / suppliers / materials /
-│   │   │                          #   supply_relations / projects / rules / share / inventory
+│   │   ├── routers/               # products / suppliers / materials / bases /
+│   │   │                          #   supply_relations / projects / rules / share / inventory / changes
 │   │   └── seed.py                # 演示数据（当前未启用）
 │   ├── scripts/smoke_test.py      # API 冒烟测试
 │   ├── requirements.txt
@@ -470,7 +472,8 @@ scm-kanban/
 │   │   │                          #     QuickAddRelationDialog 四元组快速新增）
 │   │   │                          #   + charts/（ChinaMap）、suppliers/、通用件（MaterialDrawerFilter、EmptyState 等）
 │   │   │                          #   + share/（四象限、导入、录入弹窗）
-│   │   │                          #   + inventory/（Excel 导入弹窗）
+│   │   │                          #   + inventory/（Excel 导入弹窗、DOE 卡墙）
+│   │   │                          #   + changes/（项目卡墙、自绘甘特图、预警表、燃尽图、三饼图、任务树编辑器）
 │   │   ├── hooks/                 # TanStack Query 数据层（含 use-share / use-inventory）
 │   │   ├── lib/                   # api 封装、工具函数；
 │   │   │                          #   supply-risk（供需系数三档判定与聚合，纯函数）、
@@ -558,6 +561,31 @@ scm-kanban/
 | --- | --- | --- |
 | GET | `/api/rules` | 规则列表（按 module 分组、sort_order 升序） |
 | POST / PATCH / DELETE | `/api/rules...` | 规则增删改 |
+
+**变更管理 changes / change-tasks / change-types**
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/changes` | 变更单分页列表（keyword / status / risk / project_id / archived 过滤） |
+| GET | `/api/changes/{id}` | 变更单详情（含任务树） |
+| POST | `/api/changes` | 新建变更单 |
+| PATCH | `/api/changes/{id}` | 修改变更单 |
+| DELETE | `/api/changes/{id}` | 删除（默认软删，`?hard=true` 硬删） |
+| POST | `/api/changes/{id}/void` / `/restore` | 作废 / 取消作废 |
+| POST | `/api/changes/{id}/archive` / `/unarchive` | 单张归档 / 取消归档 |
+| POST | `/api/changes/archives/project/{id}` / `.../unarchive` | 整项目归档 / 取消 |
+| GET | `/api/changes/archives` | 归档留痕列表 |
+| GET | `/api/changes/summary` | 全局统计（Dashboard 卡 5 同源） |
+| GET | `/api/changes/project-overview` | 项目卡片墙（超期数排序，含 most_urgent） |
+| GET | `/api/changes/alerts` | 预警明细（超期 / 临期 / 迟交，三级分组） |
+| GET | `/api/changes/burndown` | 燃尽图（计划阶梯线 + 实际线） |
+| GET | `/api/changes/owners` | 责任人候选 |
+| POST | `/api/changes/import` | Excel 双 sheet 导入（变更单 + 待办项） |
+| GET | `/api/changes/export` / `/template` | 导出 / 下载空模板 |
+| POST | `/api/changes/{id}/tasks` / `/tasks/batch` | 新增任务 / 批量加任务 |
+| PATCH / DELETE | `/api/change-tasks/{id}` | 修改 / 删除任务（级联删子项） |
+| POST | `/api/change-tasks/{id}/toggle` | 勾选 / 取消勾选任务 |
+| GET / POST | `/api/change-types` | 变更类型列表 / 新增 |
+| PATCH / DELETE | `/api/change-types/{id}` | 修改 / 删除类型（仅零引用可删） |
 
 **产品 products**（历史遗留的通用 CRUD，保留兼容）
 | 方法 | 路径 | 说明 |

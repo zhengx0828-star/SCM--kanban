@@ -102,7 +102,7 @@ export function InventoryRow({
           </span>
           {bomZero ? (
             <span
-              className="shrink-0 inline-flex items-center gap-0.5 rounded bg-red-500/15 px-1 py-px text-[10px] font-medium text-red-700 dark:text-red-400"
+              className="shrink-0 inline-flex items-center gap-0.5 rounded bg-red-500/10 px-1 py-px text-[10px] font-medium text-red-700 dark:text-red-400"
               title="底表 BOM 系数为 0 —— 客户需求被乘成 0。到「供需管理」把 BOM 系数改成实际用量"
             >
               <AlertTriangle className="h-2.5 w-2.5" />
@@ -110,7 +110,7 @@ export function InventoryRow({
             </span>
           ) : noDemandData || blankDemand ? (
             <span
-              className="shrink-0 inline-flex items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400"
+              className="shrink-0 inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400"
               title={
                 blankDemand
                   ? "有需求序列但窗口日均 ≈ 0（客户需求漏录或为 0），不会触发任何预警"
