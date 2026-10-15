@@ -546,9 +546,12 @@ def change_summary(db: Session = Depends(get_db)) -> ChangeSummary:
                     unassigned_tasks += 1
         overdue_tasks += c_overdue
         near_tasks += c_near
+        # ★ 临期单按「至少有一个临期任务」独立计数，不与超期互斥：
+        #   一张单同时有超期+临期任务时，应同时计入 overdue 和 near。
+        #   （此前用 elif，超期单吞掉了它的临期计数 → near_changes 恒为 0）
         if c_overdue:
             overdue_changes += 1
-        elif c_near:
+        if c_near:
             near_changes += 1
 
     type_counts: dict[int, ChangeTypeCount] = {}
@@ -671,9 +674,10 @@ def change_project_overview(
                 c_near += 1
         b["overdue_tasks"] += c_overdue
         b["near_tasks"] += c_near
+        # ★ 与 /summary 同口径：临期单独立计数，不与超期互斥（见 summary 处注释）
         if c_overdue:
             b["overdue_changes"] += 1
-        elif c_near:
+        if c_near:
             b["near_changes"] += 1
 
         tname = c.change_type.name if c.change_type else "未分类"
