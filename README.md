@@ -13,8 +13,8 @@
 | 模块 | 页面 | 说明 |
 | --- | --- | --- |
 | Dashboard | `/dashboard` | 汇总概览（纯 summary，只展示真实录入数据，联动份额波动 / 重点独供统计） |
-| 供需管理 | `/supply-demand` | 项目级客户需求（1-12 月）、供应商产能、BOM 用量系数、供需平衡分析。项目／物料双下拉筛选（物料支持 **0/N 多选**，勾选即时生效、面板不关闭）；**供应系数热力图**（行=物料 · 列=1-12 月，格子值 = 产能÷需求）+ 供需趋势柱·折线组合；需求与 BOM 的 Excel **双 sheet 导入**（`客户需求` / `物料BOM与产能`，模板可下载） |
-| 项目供需明细 | `/supply-demand/projects/:projectId` | 项目下的供应明细、关联物料/供应商，录入需求 / 产能 / BOM 系数；**四元组一行式快速新增**供应关系（自动建 L1 主数据并挂载到项目） |
+| 供需管理 | `/supply-demand` | 项目级客户需求（1-12 月）、供应商产能、BOM 用量系数、供需平衡分析。项目／物料双下拉筛选（物料支持 **0/N 多选**，勾选即时生效、面板不关闭）；**供应系数热力图**（行=物料 · 列=1-12 月，格子值 = 产能÷需求）+ 供需趋势柱·折线组合；需求与 BOM 的 Excel **双 sheet 导入**（`客户需求` / `物料BOM与产能`，模板可下载）；项目卡片带**需求版本徽标**、客户需求区块标注当前版本口径 |
+| 项目供需明细 | `/supply-demand/projects/:projectId` | 项目下的供应明细、关联物料/供应商，录入需求 / 产能 / BOM 系数；**客户需求版本化**（折叠下拉切换版本、另存为新版本、设为当前版；历史版本只读）；**四元组一行式快速新增**供应关系（自动建 L1 主数据并挂载到项目） |
 | 份额管理 | `/share` | 项目维度份额概览：KPI 卡 + 风险排行 + 份额×评分四象限 + 月末结转 |
 | 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（含基地配额列）+ 行内编辑/删除 + 基地拉线配置（动态基地列，bases 随行快照） |
 | 主数据 | `/materials` | 供应商 / 物料 / 供应关系 / 项目 统一管理页（含地图点位、风险等级） |
@@ -44,6 +44,7 @@
 - L1 主数据：`projects` / `materials`（PN 唯一）/ `suppliers`（含 `risk_level` 地图风险等级，红/黄/绿/NULL=未评估）
 - L2 供应关系：`supply_relations`（material × supplier 唯一，四元组）
 - L3 项目明细：`project_supply_relations`（UNIQUE(project, supply_relation)，模块扩展字段 demand/capacity/bom_factor 等）
+- L3 需求版本：`project_demand_versions`（UNIQUE(project_id, seq) + 部分唯一索引 `uq_demand_version_current`，客户需求按版本追加 12 月快照，`is_current` 标记当前版；`project_supply_relations.demand` 降级为「当前版投影副本」）
 - L3 份额管理：`share_records`（UNIQUE(project_id, supply_relation_id, month)，按月快照；份额/评分/建议配额/独供 + `bases` 基地快照 JSON `[{base, share, lines}]`，拉线数随记录自含。早期独立 `share_base_configs` 表已废弃，后端启动时自动 DROP）
 - L3 库存信号塔：`inventory_plans`（UNIQUE(project, base, material)，推算单元，存 lead_time/on_hand/hist_json/fcast_json）+ `inventory_days`（UNIQUE(plan, date)，只存人改过的日格：demand_override/manual_demand/manual_in/ending_override）
 - L3 变更管理：`change_types`（变更类型）+ `changes`（变更单，含 status 有效/作废、archived_at、完成率/时间进度/偏差等派生字段）+ `change_tasks`（多级任务树，叶子状态由后端按时间派生：todo/soon/overdue/done/late）+ `change_archives`（归档留痕）
@@ -98,6 +99,17 @@
 - **✅ 凭证已就位（2026-10-14）**：本机 Git Credential Manager 2.9.0 已保存 GitHub 账号 `zhengx0828-star`（`git credential-manager github list` 可见，凭证落在 Windows 凭据管理器）。**此后 `git push origin master` 直接推，不再弹授权窗口、无需 PAT。** 换机器或凭证失效时，执行一次 `git credential-manager github login` 重新授权。
 - **⚠️ git 不在系统 PATH（2026-10-14 核实）**：本机未独立安装 Git，git 只在 WorkBuddy 自带 `PortableGit` 里。**所有 `git` 命令都需在 WorkBuddy 会话内执行**（详见 9.5）——在自己开的 PowerShell / cmd 里敲 `git` 会报「不是内部或外部命令」。
 - 日常迭代走第九节：改代码前先 `git pull`，改完 `git push`（在 WorkBuddy 会话内直接敲裸命令即可）。
+
+### 3.5 客户需求版本化（2026-10-16 上线）
+
+客户需求会改版（V1.0 → V2.0），因此**需求不再就地覆盖**：每次保存追加一条完整的 12 月快照，全站供需计算只认「当前版」。
+
+- **只版本化客户需求**：BOM 系数（项目×物料）与供应商产能（物料×供应商）**恒定，不参与版本化** —— 所以版本切换只动需求侧（供应系数 `= 产能 ÷ 需求` 随之变），**版本对比天然就是风险对比**。
+- **新表 `project_demand_versions`**：`UNIQUE(project_id, seq)` + 部分唯一索引 `uq_demand_version_current`（保证同项目至多一条当前版）。**排序与「取上一版」一律用 `seq`**，`version_no` 仅展示（可人工改成 2.0）。
+- **★ 双写投影**：版本表是唯一真相源；`project_supply_relations.demand` 保留为「当前版的投影副本」，写版本时同步回写，让既有的 6 处消费方（供需首页聚合 / 项目详情物料聚合 / 物料弹窗 / 库存信号塔按 BOM 折算 / Excel 导入 / 需求折线）**零改动继续可用**。
+- **界面**：项目详情页「客户需求」折叠下拉切换版本 / 另存为新版本 / 设为当前（历史版本只读）；首页项目卡片带版本徽标；版本下拉内含「版本对比…」入口（折线对比 + 转置差异表 + 风险迁移表）。
+- **接口**：`GET/POST /api/projects/{id}/demand-versions`、`POST .../demand-versions/{vid}/set-current`、`GET /api/projects/demand-version-summary`；`PUT /api/projects/{id}/demand` 语义升级为「生成新版本 + 设为当前版」。完整清单见「十一、API 概览」。
+- **方案详设**：`docs/demand-versioning/01-方案定稿.md`（含设计取舍与实测截图）。
 
 ---
 
@@ -469,6 +481,8 @@ scm-kanban/
 │   │   ├── components/            # ui/（自研 MultiSelectDropdown 绝对定位面板，避开 radix 浮层在 dev 下的错位）
 │   │   │                          #   + projects/（SupplyCoefHeatmap 供应系数热力图、
 │   │   │                          #     DemandExcelImportDialog 需求/BOM 双 sheet 导入、
+│   │   │                          #     DemandVersionBar 需求版本切换下拉、CreateDemandVersionDialog 另存新版本、
+│   │   │                          #     DemandCompareDialog 版本对比（折线+转置差异表+风险迁移）、
 │   │   │                          #     QuickAddRelationDialog 四元组快速新增）
 │   │   │                          #   + charts/（ChinaMap）、suppliers/、通用件（MaterialDrawerFilter、EmptyState 等）
 │   │   │                          #   + share/（四象限、导入、录入弹窗）
@@ -483,7 +497,8 @@ scm-kanban/
 ├── scripts/                       # start-{backend,frontend}.{bat,sh}（.bat 为 GBK 编码，勿按 UTF-8 改）、
 │                                  #   gen_source_docx.py、seed_{share,inventory}_validation.py（验证种子，幂等可重跑）、
 │                                  #   verify_{supply_demand_page,map_points,supply_risk}.mjs（CDP 常驻验收脚本）
-├── docs/                          # 截图、opencode-reproduce-prompt.md（AI 复现提示词）
+├── docs/                          # 截图、opencode-reproduce-prompt.md（AI 复现提示词）、
+│                                  #   demand-versioning/（客户需求版本化方案定稿 + 实测截图）
 └── README.md / AGENT.md
 ```
 
@@ -527,7 +542,11 @@ scm-kanban/
 | POST | `/api/projects/{id}/relations` | 挂供应关系到项目（带项目专属字段） |
 | POST | `/api/projects/{id}/relations/quick-add` | 四元组快速录入（自动建主数据并挂载） |
 | PATCH | `/api/projects/{id}/relations/{link_id}` | 明细行更新（含 demand / capacity / bom_factor 等扩展字段） |
-| PUT | `/api/projects/{id}/demand` | 批量维护客户需求（项目级，同步全项目明细） |
+| PUT | `/api/projects/{id}/demand` | 维护客户需求 —— **语义已升级为「生成新版本 + 设为当前版」**（只增不改），并把当前版投影回写各明细行 `demand` |
+| GET | `/api/projects/{id}/demand-versions` | 客户需求版本链（新版在前，含 `is_current` / `year_total`） |
+| POST | `/api/projects/{id}/demand-versions` | 新建一个需求版本（只增不改；首版自动成为当前版） |
+| POST | `/api/projects/{id}/demand-versions/{vid}/set-current` | 把某版本设为当前版（全站供需计算随之切换） |
+| GET | `/api/projects/demand-version-summary` | 各项目需求版本摘要（首页项目卡片 / 客户需求区块用，一次拿全部，`project_ids` 可选） |
 | PUT | `/api/projects/{id}/bom` | 批量维护某物料 BOM 系数（项目×物料，同步该物料各行） |
 | GET | `/api/projects/demand-import-template` | 下载供需管理 Excel 导入模板（双 sheet：`客户需求` + `物料BOM与产能`） |
 | DELETE | `/api/projects/{id}/relations/{link_id}` | 解除项目-供应关系 |

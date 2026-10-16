@@ -116,9 +116,68 @@ export interface ProjectSupplyRelationQuickCreateInput {
   sync_master_names?: boolean;
 }
 
-/** 批量维护某项目的客户需求（1-12月，同步到该项目下所有供应明细；项目级数据） */
+/** 批量维护某项目的客户需求（1-12月，同步到该项目下所有供应明细；项目级数据）
+ *
+ * ★ 2026-10-16 起语义升级：不再就地覆盖，而是**生成一个新版本并置为当前版**
+ *   （需求版本化，见 docs/demand-versioning/01-方案定稿.md）。
+ *   可选的版本字段不传时由服务端按「上一版 +0.1」自动生成。
+ */
 export interface ProjectDemandUpdateInput {
   demand: number[];
+  version_no?: string | null;
+  label?: string | null;
+  source?: DemandVersionSource;
+  effective_date?: string | null;
+}
+
+/** 需求版本来源 */
+export type DemandVersionSource = "manual" | "excel";
+
+/** 客户需求版本（只增不改的快照；全站供需计算只认 is_current 的那一版） */
+export interface DemandVersion {
+  id: number;
+  project_id: number;
+  /** 项目内自增序号：排序与「取上一版」一律用它，不用 version_no */
+  seq: number;
+  /** 展示用版本号，如 1.0 / 2.0 */
+  version_no: string;
+  label: string | null;
+  /** 12 月需求快照 */
+  demand: number[] | null;
+  source: DemandVersionSource;
+  effective_date: string | null;
+  is_current: boolean;
+  note: string | null;
+  created_by: string | null;
+  /** 12 月合计（版本下拉直接显示用） */
+  year_total: number;
+  created_at: string;
+}
+
+/** 项目需求版本摘要（供需管理首页多项目同屏用，一次拿全部） */
+export interface ProjectDemandVersionSummary {
+  project_id: number;
+  version_count: number;
+  current_version_no: string | null;
+  current_label: string | null;
+  current_effective_date: string | null;
+  current_year_total: number | null;
+  prev_year_total: number | null;
+  /** 当前版 − 上一版（年合计）；无上一版为 null */
+  delta: number | null;
+  delta_pct: number | null;
+}
+
+/** 新建客户需求版本请求体 */
+export interface DemandVersionCreateInput {
+  demand: number[];
+  version_no?: string | null;
+  label?: string | null;
+  source?: DemandVersionSource;
+  effective_date?: string | null;
+  note?: string | null;
+  /** 是否同时设为当前版（项目首版强制为当前版） */
+  set_current?: boolean;
 }
 
 /** 批量维护某物料的 BOM 用量系数（项目×物料，同步到该项目下该物料所有供应明细） */

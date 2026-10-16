@@ -45,7 +45,7 @@
 | 端口 | 后端 8000 / 前端 5173 |
 | Git | `master` 分支，`origin` = `https://github.com/zhengx0828-star/SCM--kanban.git`（凭证已就位，可直接 `git push`）｜**git 只在 WorkBuddy 自带 PortableGit 中、未加系统 PATH**（2026-10-14 核实） |
 
-**功能模块**：Dashboard、供需管理、份额管理、库存管理（信号塔）、主数据（供应商/物料/供应关系/项目）、规则手册。API 全量清单见 `README.md`「十一、API 概览」。
+**功能模块**：Dashboard、供需管理（含**客户需求版本化**）、份额管理、库存管理（信号塔）、主数据（供应商/物料/供应关系/项目）、规则手册。API 全量清单见 `README.md`「十一、API 概览」。
 
 ---
 
@@ -696,6 +696,91 @@ robocopy "%SOURCE%" "%TARGET%" ...    rem 此时引号安全
 **关联坑**：`%~1`（拖拽进来的路径）也可能带尾反斜杠，规范化用 `pushd "%SOURCE%"` → `set "SOURCE=%CD%"` → `popd`。
 
 **新脚本 `update-from-zip.bat`（项目根目录）**：把 GitHub 下载解压出来的代码文件夹**拖到它上面松手**，自动执行「备份 `products.db` → robocopy 覆盖代码（排除 `runtime/`、`node_modules/`、`products.db`）→ 提示完成」。改它同样受坑 7 约束（**必须 GBK + CRLF**，现文件已是 GBK）。
+
+
+---
+
+### 坑 25：★ 重渲染 + document 级点击监听 → `contains()` 误判，**面板刚展开就被自己关掉**
+
+2026-10-16 做「客户需求版本下拉」时踩到：点触发器**毫无反应**，也不报错，`aria-expanded` 一直 `false`。
+
+**根因**：触发器 `onClick` 里先 `setOpen(true)` 再重渲染，此时**被点击的那个 DOM 节点已经被替换掉**（React 重建了子树）。
+事件继续冒泡到 `document` 上的"点击外部关闭"监听器时，`e.target` 已是**脱离 DOM 的旧节点**，
+`wrapRef.current.contains(e.target)` 恒为 `false` → 判定成"点在外部" → 立刻 `setOpen(false)`。
+于是**展开与收起在同一帧里相抵**，表现就是"点了没反应"。
+
+**修法（二选一，推荐 A）**：
+
+```tsx
+// A. 用**事件路径**判断：路径在派发时固定，不受后续 DOM 重建影响
+const path = e.composedPath ? e.composedPath() : [];
+const inside = path.length ? path.includes(wrapRef.current!) : wrapRef.current!.contains(e.target as Node);
+if (!inside) setOpen(false);
+
+// B. 改用 mousedown（项目里 MultiSelectDropdown 用的就是这招）—— mousedown 早于 click，
+//    重渲染还没发生，contains() 判定是准的
+document.addEventListener("mousedown", onDown);
+```
+
+**规矩**：**任何"重渲染 + 文档级关闭监听"的浮层，都要过一遍这个判据** ——
+真实点击 → 断言 `面板可见` **且** `aria-expanded === "true"`。只断言"点击后没报错"完全抓不到。
+
+
+### 坑 26：★ 部分唯一索引（`WHERE is_current = 1`）要求**先清旧、再置新**
+
+`project_demand_versions` 用部分唯一索引保证「同项目至多一条当前版」：
+
+```python
+Index("uq_demand_version_current", "project_id", unique=True, sqlite_where=text("is_current = 1"))
+```
+
+SQLite 的索引约束是**逐语句校验**的，所以切换当前版必须严格按这个顺序：
+
+```python
+# ✅ 1) 先插入新行（is_current=0）  2) flush  3) 清旧 current  4) 再置新 current
+db.add(ver); db.flush()                       # flush 不能省：sessionmaker(autoflush=False)
+db.execute(update(ProjectDemandVersion)
+    .where(ProjectDemandVersion.project_id == pid, ProjectDemandVersion.is_current.is_(True),
+           ProjectDemandVersion.id != ver.id)
+    .values(is_current=False))
+ver.is_current = True
+db.commit()
+```
+
+顺序反了（先置新、后清旧）会**直接撞 UNIQUE 约束**；
+漏掉 `flush()` 则后面的 `SELECT` 看不到新行（autoflush=False），会误判"项目还没有版本"。
+
+**规矩**：新增这类"同组唯一"的部分索引时，**写入路径必须写成"先腾位、再占位"**，
+并补一条「同项目插第二条 `is_current=1` 应被拒」的回归断言（直接用 `sqlite3` 插一条即可，见 2026-10-16 的自检脚本）。
+
+
+### 坑 27：★ 堆叠柱图的 Y 轴上限必须按「堆叠合计」算，否则柱顶被**静默裁平**
+
+2026-10-16：给 LFP3 的物料补录 3 家供应商产能后，物料供需图 9-12 月的柱子**顶到同一水平线**，
+看上去 11 月（83,000）和 10 月（80,000）一样高 —— 实际是 11 月柱被裁掉了 6,000。
+
+根因在 `MaterialSupplyCharts.tsx`：柱子是 `stack: "cap"` **堆叠**绘制的，
+但 Y 轴上限取的是**单家供应商**产能的峰值：
+
+```js
+// ❌ maxCapacity 只看到单家峰值（KL 45,000），看不到堆叠后的合计（83,000）
+const maxCapacity = Math.max(0, ...capacity.flatMap((s) => s.capacitySeries));
+const maxY = Math.max(maxDemand, maxCapacity);   // → 66,932 → yAxis.max = 76,980
+```
+
+ECharts 默认 `clip: true` 会把超出 `yAxis.max` 的柱体裁掉，**不报错、控制台无警告、顶部无溢出**，
+只是图形在说谎。改成按月先把各家加起来再取峰值：
+
+```js
+const stackedCapacity = Array.from({ length: 12 }, (_, t) =>
+  capacity.reduce((sum, s) => sum + (s.capacitySeries[t] ?? 0), 0));
+const maxCapacity = Math.max(0, ...stackedCapacity);   // → 83,000 → yAxis.max = 95,450
+```
+
+**规矩**：凡是 `stack` 的柱 / 面积系列，Y 轴上限必须用**堆叠后的合计序列**求峰值，
+不能用各系列各自的峰值。这类错误 tsc / build / 控制台全都不吭声，
+**唯一可靠的验收是「拿已知数据目视核对最高的那根柱有没有贴顶」** ——
+本次正是靠肉眼看出「9-12 月柱子等高」才挖出来，值得作为图表类改动的固定检查动作。
 
 
 ---

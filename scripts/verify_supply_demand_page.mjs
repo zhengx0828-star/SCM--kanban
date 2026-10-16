@@ -7,10 +7,14 @@
  *
  * 断言：
  *   1) 点开「项目」下拉后面板未被祖先裁剪（命中测试落到面板内部）
- *   2) 选完项目后「物料」下拉变为可用（0/2）
+ *      ★ 2026-10-16 起：筛选器从「明细分析」独立卡**内嵌进两张内容卡的卡头**，
+ *        本步点到的就是卡头里的下拉；裁剪检查同样适用（AnalysisSection 必须 overflow-visible）
+ *   2) 页面上有 2 处「项目」下拉且文本一致（同一份选择 · 联动），「物料」下拉变为可用
  *   3) 勾选物料后：物料供需图 + 供应系数热力图出现
- *   4) 热力图为固定列宽 `200px repeat(12, 34px)`，12 个格子**宽度完全一致**
+ *   4) 热力图为固定列宽 `200px repeat(12, 34px)`，**每行 12 格且所有格子宽度完全一致**
+ *      （行数 = 物料数，不写死 —— 库里有几个物料就跑几行）
  *   5) 格子内是产能÷需求的系数（不是空、不是 NaN）
+ *      —— 若所选物料未录入 BOM / 产能，页面按「数据保真」只给空态，第 4、5 段记 SKIP，不算失败
  *
  * 用法（需前端已启动）：
  *   node scripts/verify_supply_demand_page.mjs [url] [截图输出目录]
@@ -172,9 +176,18 @@ try {
   await sleep(700);
   console.log("  ", await clickInPanel("完成"));
   await sleep(1500);
+  const projTriggers = await evaluate(`JSON.stringify([...document.querySelectorAll("button")].map(b=>(b.textContent||"").trim()).filter(t=>t.startsWith("项目：")))`);
   const triggers = await evaluate(`JSON.stringify([...document.querySelectorAll("button")].map(b=>(b.textContent||"").trim().slice(0,26)).filter(t=>t.startsWith("项目：")||t.startsWith("物料：")))`);
   await shot("03-project-selected.png");
-  check("项目下拉显示已选", String(triggers).includes("项目：全部"), String(triggers));
+  let projList = [];
+  try { projList = JSON.parse(projTriggers); } catch { /* ignore */ }
+  check("页面上有 2 处「项目」下拉（客户需求卡 + 物料供需分析卡）", projList.length === 2, projTriggers);
+  check("两处「项目」下拉文本一致（同一份选择 · 联动）", projList.length === 2 && projList[0] === projList[1], projTriggers);
+  check(
+    "项目下拉显示已选（触发器不再是占位文案）",
+    /项目：(?!选择项目)/.test(String(triggers)),
+    String(triggers)
+  );
 
   /* ---- 3. 物料下拉可用并可勾选 ---- */
   console.log("\n[3] 选择物料");
@@ -200,38 +213,51 @@ try {
   const after = await evaluate(`JSON.stringify([...document.querySelectorAll("button")].map(b=>(b.textContent||"").trim().slice(0,26)).filter(t=>t.startsWith("物料：")))`);
   check("物料下拉显示已全选", String(after).includes("全部"), String(after));
 
-  /* ---- 4. 热力图渲染 ---- */
-  console.log("\n[4] 供应系数热力图");
-  const hm = await evaluate(`(() => {
-    const g = [...document.querySelectorAll("div")].find(d => String(d.style.gridTemplateColumns||"").includes("repeat(12, 34px)"));
-    if (!g) return "NO_HEATMAP";
-    const kids = [...g.children];
-    const header = kids.slice(1, 13).map(c => (c.textContent||"").trim());
-    const rowCellIdx = i => 14 + i;
-    const row1 = [...Array(12)].map((_, i) => kids[rowCellIdx(i)]);
-    const widths = [];
-    for (let r = 0; r < 2; r++) {
-      for (let i = 0; i < 12; i++) {
-        const el = kids[13 + r * 13 + 1 + i];
-        if (el) widths.push(Math.round(el.getBoundingClientRect().width));
+  /* ---- 4. 热力图渲染 ----
+     注：所选物料若未录入 BOM 系数 / 供应商产能，页面按「数据保真」只显示空态，
+     热力图本就不该出现 —— 这种情况记为 SKIP，不算失败（不是布局/渲染 bug）。 */
+  const noSupplyData = await evaluate(`document.body.innerText.includes("暂无物料供需数据")`);
+  if (noSupplyData) {
+    console.log(
+      "\n[4] 供应系数热力图 —— SKIP：所选物料未录入 BOM / 产能，页面按数据保真显示「暂无物料供需数据」空态"
+    );
+  } else {
+    console.log("\n[4] 供应系数热力图");
+    const hm = await evaluate(`(() => {
+      const g = [...document.querySelectorAll("div")].find(d => String(d.style.gridTemplateColumns||"").includes("repeat(12, 34px)"));
+      if (!g) return "NO_HEATMAP";
+      const kids = [...g.children];
+      const header = kids.slice(1, 13).map(c => (c.textContent||"").trim());
+      const rowCellIdx = i => 14 + i;
+      const row1 = [...Array(12)].map((_, i) => kids[rowCellIdx(i)]);
+      const widths = [];
+      for (let r = 0; r < 2; r++) {
+        for (let i = 0; i < 12; i++) {
+          const el = kids[13 + r * 13 + 1 + i];
+          if (el) widths.push(Math.round(el.getBoundingClientRect().width));
+        }
       }
-    }
-    return JSON.stringify({
-      gridCols: String(g.style.gridTemplateColumns),
-      headers: header,
-      row1: row1.map(c => (c.textContent||"").trim()),
-      allCellWidths: Array.from(new Set(widths)),
-      cellCount: widths.length,
-      hasTitle: [...document.querySelectorAll("h3")].some(h => (h.textContent||"").includes("供应系数热力"))
-    });
-  })()`);
-  console.log("  ", hm);
-  let h = null;
-  try { h = JSON.parse(hm); } catch { /* ignore */ }
-  check("热力图已渲染", !!h && h.gridCols === "200px repeat(12, 34px)", h ? h.gridCols : String(hm).slice(0, 80));
-  check("表头为 1-12 月", !!h && h.headers.join(",") === "1,2,3,4,5,6,7,8,9,10,11,12");
-  check("24 个格子宽度完全一致（不再大小不一）", !!h && h.cellCount === 24 && h.allCellWidths.length === 1, h ? `widths=${h.allCellWidths} count=${h.cellCount}` : "");
-  check("格内为供应系数数值", !!h && h.row1.every((v) => /^\d+\.\d{2}$/.test(v)), h ? h.row1.join(",") : "");
+      return JSON.stringify({
+        gridCols: String(g.style.gridTemplateColumns),
+        headers: header,
+        row1: row1.map(c => (c.textContent||"").trim()),
+        allCellWidths: Array.from(new Set(widths)),
+        cellCount: widths.length,
+        hasTitle: [...document.querySelectorAll("h3")].some(h => (h.textContent||"").includes("供应系数热力"))
+      });
+    })()`);
+    console.log("  ", hm);
+    let h = null;
+    try { h = JSON.parse(hm); } catch { /* ignore */ }
+    check("热力图已渲染", !!h && h.gridCols === "200px repeat(12, 34px)", h ? h.gridCols : String(hm).slice(0, 80));
+    check("表头为 1-12 月", !!h && h.headers.join(",") === "1,2,3,4,5,6,7,8,9,10,11,12");
+    check(
+      "每行 12 格、所有格子宽度完全一致（不再大小不一）",
+      !!h && h.cellCount > 0 && h.cellCount % 12 === 0 && h.allCellWidths.length === 1,
+      h ? `widths=${h.allCellWidths} count=${h.cellCount}（${h.cellCount / 12} 行 × 12 月）` : ""
+    );
+    check("格内为供应系数数值", !!h && h.row1.every((v) => /^\d+\.\d{2}$/.test(v)), h ? h.row1.join(",") : "");
+  }
 
   console.log(`\n========== 结果：${pass} 通过 / ${fail} 失败 ==========`);
   console.log("截图目录:", OUT);

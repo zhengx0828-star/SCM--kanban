@@ -170,6 +170,62 @@ def _migrate_inventory_plans(conn, logs: list[str]) -> None:
     logs.append(f"inventory_plans 已升级为 项目×物料×供应商×基地，迁移 {moved} 条{tail}")
 
 
+def _migrate_demand_versions(conn, logs: list[str]) -> None:
+    """把历史 `project_supply_relations.demand` 收编为需求版本 V1.0。
+
+    需求版本化上线前，「客户需求」是**就地覆盖**的单个字段，没有任何历史留痕。
+    本迁移把它落成每个项目的第一个版本，避免老数据在版本化后「查不到当前版」。
+
+    幂等且保守：
+      - 只给「尚无任何版本记录」的项目补一条 V1.0；
+      - `demand` 为空 / 空串的项目**跳过**（保持「未录入」空态，不造数据）；
+      - 只读取旧值、只插入新行，**不 UPDATE、不 DELETE 任何既有字段**。
+    """
+    if not _table_exists(conn, "project_demand_versions"):
+        return  # 建表由 main.py 的 create_all 负责
+    if not _table_exists(conn, "project_supply_relations"):
+        return
+
+    rows = conn.execute(
+        text(
+            "SELECT project_id, demand FROM project_supply_relations "
+            "WHERE demand IS NOT NULL AND TRIM(demand) <> '' "
+            "GROUP BY project_id ORDER BY project_id"
+        )
+    ).mappings().all()
+    if not rows:
+        return
+
+    migrated = skipped = 0
+    for r in rows:
+        pid = r["project_id"]
+        exists = conn.execute(
+            text("SELECT 1 FROM project_demand_versions WHERE project_id = :p LIMIT 1"), {"p": pid}
+        ).fetchone()
+        if exists:
+            skipped += 1
+            continue
+        conn.execute(
+            text(
+                "INSERT INTO project_demand_versions "
+                "(project_id, seq, version_no, label, demand, source, effective_date, is_current, note, created_by) "
+                "VALUES (:p, 1, '1.0', :label, :demand, 'manual', NULL, 1, :note, NULL)"
+            ),
+            {
+                "p": pid,
+                "label": "初始版（历史数据迁移）",
+                "demand": r["demand"],
+                "note": "需求版本化上线时由既有客户需求自动生成",
+            },
+        )
+        migrated += 1
+
+    if migrated:
+        logs.append(f"需求版本已为 {migrated} 个项目建立 V1.0")
+    if skipped:
+        logs.append(f"需求版本迁移跳过 {skipped} 个项目（已有版本记录）")
+
+
 def run_migrations(engine: Engine) -> list[str]:
     """执行全部迁移，返回执行记录（供启动日志打印）。幂等，可重复调用。"""
     logs: list[str] = []
@@ -183,6 +239,7 @@ def run_migrations(engine: Engine) -> list[str]:
             with conn.begin():
                 _add_column_if_missing(conn, "supply_relations", "capacity", "TEXT", logs)
                 _migrate_inventory_plans(conn, logs)
+                _migrate_demand_versions(conn, logs)
         finally:
             conn.exec_driver_sql("PRAGMA foreign_keys=ON")
     return logs

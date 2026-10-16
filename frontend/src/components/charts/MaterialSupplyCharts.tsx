@@ -57,7 +57,13 @@ function buildComboOption(
   const t = dark ? THEME.dark : THEME.light;
   const visibleDemand = demand.filter((d) => d.demandSeries.some((v) => v > 0));
   const maxDemand = Math.max(0, ...visibleDemand.flatMap((d) => d.demandSeries));
-  const maxCapacity = Math.max(0, ...capacity.flatMap((s) => s.capacitySeries));
+  // ★ 产能柱是 `stack: "cap"` **堆叠**绘制的，所以 Y 轴上限必须按「按月堆叠后合计」的峰值算。
+  //   早期版本取的是**单家供应商**产能的峰值 —— 只要某月「各家之和 > 单家峰值」，
+  //   柱顶就会冲出 yAxis.max 被静默裁平（图上看着 11 月和 10 月一样高），数据失真且无任何报错。
+  const stackedCapacity = Array.from({ length: 12 }, (_, t) =>
+    capacity.reduce((sum, s) => sum + (s.capacitySeries[t] ?? 0), 0)
+  );
+  const maxCapacity = Math.max(0, ...stackedCapacity);
   const maxY = Math.max(maxDemand, maxCapacity);
 
   return {

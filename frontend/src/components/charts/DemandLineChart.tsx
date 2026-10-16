@@ -31,6 +31,11 @@ export interface DemandProjectSeries {
   demand: number[] | null;
   /** 是否可见（切片器状态） */
   visible: boolean;
+  /**
+   * 画成虚线（不带数据点）。
+   * 版本对比用：**当前版实线 + 对比版虚线**，一眼区分新旧，不靠颜色记忆。
+   */
+  dash?: boolean;
 }
 
 /** 构建 series options（按 id 合并，echarts.setOption 按 id 增量更新） */
@@ -40,12 +45,13 @@ function buildSeries(items: DemandProjectSeries[]): echarts.SeriesOption[] {
     name: `${p.code} · ${p.name}`,
     type: "line",
     smooth: true,
-    symbol: "circle",
+    // 虚线系列不带数据点：对比版只是参照，点会挡住当前版
+    symbol: p.dash ? "none" : "circle",
     symbolSize: 7,
-    showSymbol: true,
+    showSymbol: !p.dash,
     // demand 为 null 时整条线不画（不是断续，echarts 默认会把 null 视为空断点，但既然投影要语义化为"未录入"，直接不展示）
     data: p.demand ?? [],
-    lineStyle: { width: 2.2, color: p.color },
+    lineStyle: { width: p.dash ? 1.8 : 2.2, color: p.color, type: p.dash ? "dashed" : "solid" },
     itemStyle: { color: p.color, borderColor: p.color, borderWidth: 0 },
     emphasis: {
       focus: "series",
@@ -75,10 +81,29 @@ const THEME = {
   },
 } as const;
 
+/**
+ * 从 0 起的「整齐」纵轴：按 [1,2,5]×10ⁿ 选步长，保证刻度落在整数上。
+ *
+ * 例：峰值 66,932 → { max: 80,000, interval: 20,000 }，刻度 0 / 20k / 40k / 60k / 80k
+ *    峰值 669,320（物料需求折合 BOM 后）→ { max: 800,000, interval: 200,000 }
+ *
+ * 为什么不信 echarts 的自动 nice：**显式给了 max 之后**它仍按自己的 extent 算 interval，
+ * 容易在顶部留出一条不完整的刻度（0/20k/40k/60k/77k），读数别扭。这里自己把步长定死。
+ */
+function niceFromZero(peak: number, targetTicks = 5): { max: number; interval: number } {
+  if (!(peak > 0)) return { max: 100, interval: 25 };
+  const raw = (peak * 1.05) / targetTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  return { max: Math.ceil((peak * 1.05) / step) * step, interval: step };
+}
+
 function buildOption(dark: boolean, series: DemandProjectSeries[]): echarts.EChartsOption {
   const t = dark ? THEME.dark : THEME.light;
   const visibleSeries = series.filter((s) => s.visible && s.demand);
   const maxY = Math.max(0, ...visibleSeries.flatMap((s) => s.demand ?? []));
+  const axis = niceFromZero(maxY);
 
   return {
     backgroundColor: t.background,
@@ -148,9 +173,13 @@ function buildOption(dark: boolean, series: DemandProjectSeries[]): echarts.ECha
       splitLine: { lineStyle: { color: t.splitLine, type: "dashed" } },
       axisLine: { show: false },
       axisTick: { show: false },
-      // 不强制 0 起，让数据更聚焦；保留底部 padding
-      scale: true,
-      max: maxY > 0 ? Math.ceil((maxY * 1.15) / 10) * 10 : 100,
+      // ★ 2026-10-16 改：**从 0 起**，不再用 `scale: true` 截断纵轴。
+      //   截断 = 让起伏占满整个纵轴 —— 峰值 67k / 谷值 30k 时起伏占 79%，
+      //   把本来平稳的客户需求画成"上蹿下跳"。从 0 起后同样的起伏只占约 46%，
+      //   观感才贴合「需求稳定」的事实。（数据一个字节都没改，纯观感）
+      min: 0,
+      max: axis.max,
+      interval: axis.interval,
     },
     series: buildSeries(series),
     animationDuration: 500,

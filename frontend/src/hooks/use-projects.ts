@@ -1,6 +1,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { projectApi } from "../lib/api";
 import type {
+  DemandVersionCreateInput,
   ProjectBomUpdateInput,
   ProjectCreateInput,
   ProjectDemandUpdateInput,
@@ -16,6 +18,8 @@ export const projectKeys = {
   list: (params: ProjectListParams) => ["projects", "list", params] as const,
   relations: (projectId: number) => ["projects", "relations", projectId] as const,
   suppliers: (projectId: number) => ["projects", "suppliers", projectId] as const,
+  demandVersions: (projectId: number) => ["projects", "demand-versions", projectId] as const,
+  demandVersionSummary: (ids: number[]) => ["projects", "demand-version-summary", ids] as const,
 };
 
 /** 分页查询项目 */
@@ -115,13 +119,68 @@ export function useUpdateProjectRelation(projectId: number | null) {
   });
 }
 
-/** 批量维护某物料的客户需求（1-12月，同步到该项目下该物料所有供应明细） */
+/** 批量维护某物料的客户需求（1-12月，同步到该项目下该物料所有供应明细）
+ *
+ * ★ 语义已升级为「生成新版本 + 设为当前版」（需求版本化）：
+ *   成功后除刷新明细外，还要刷新版本链与首页版本摘要。
+ */
 export function useUpdateProjectDemand(projectId: number | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (data: ProjectDemandUpdateInput) => projectApi.updateDemand(projectId!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: projectKeys.relations(projectId ?? -1) });
+      queryClient.invalidateQueries({ queryKey: projectKeys.demandVersions(projectId ?? -1) });
+      queryClient.invalidateQueries({ queryKey: ["projects", "demand-version-summary"] });
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/*  客户需求版本                                                                */
+/* -------------------------------------------------------------------------- */
+
+/** 某项目的客户需求版本链（新版在前） */
+export function useDemandVersions(projectId: number | null) {
+  return useQuery({
+    queryKey: projectKeys.demandVersions(projectId ?? -1),
+    queryFn: () => projectApi.demandVersions(projectId!),
+    enabled: projectId != null,
+  });
+}
+
+/** 各项目的需求版本摘要（供需管理首页多项目同屏，一次拿全部） */
+export function useDemandVersionSummary(projectIds: number[]) {
+  const ids = useMemo(() => [...projectIds].sort((a, b) => a - b), [projectIds]);
+  return useQuery({
+    queryKey: projectKeys.demandVersionSummary(ids),
+    queryFn: () => projectApi.demandVersionSummary(ids),
+    enabled: ids.length > 0,
+  });
+}
+
+/** 新建一个客户需求版本（只增不改） */
+export function useCreateDemandVersion(projectId: number | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: DemandVersionCreateInput) => projectApi.createDemandVersion(projectId!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: projectKeys.demandVersions(projectId ?? -1) });
+      queryClient.invalidateQueries({ queryKey: projectKeys.relations(projectId ?? -1) });
+      queryClient.invalidateQueries({ queryKey: ["projects", "demand-version-summary"] });
+    },
+  });
+}
+
+/** 把某个需求版本设为当前版（全站供需计算随之切换） */
+export function useSetCurrentDemandVersion(projectId: number | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (versionId: number) => projectApi.setCurrentDemandVersion(projectId!, versionId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: projectKeys.demandVersions(projectId ?? -1) });
+      queryClient.invalidateQueries({ queryKey: projectKeys.relations(projectId ?? -1) });
+      queryClient.invalidateQueries({ queryKey: ["projects", "demand-version-summary"] });
     },
   });
 }

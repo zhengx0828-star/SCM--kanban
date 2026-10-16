@@ -197,6 +197,13 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
     )
 
+    # 客户需求版本链（只增不改的快照序列）。
+    # ★ 刻意不加 lazy="selectin"：项目列表接口不应顺带把版本行全查出来；
+    #   删除项目时的级联由 delete-orphan 在 flush 阶段按需加载完成。
+    demand_versions: Mapped[list["ProjectDemandVersion"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
 
 class ProjectSupplyRelation(Base):
     """L3 项目供应明细：四元组 + 项目专属字段。
@@ -236,6 +243,52 @@ class ProjectSupplyRelation(Base):
 
     project: Mapped[Project] = relationship(back_populates="supply_links")
     supply_relation: Mapped[SupplyRelation] = relationship(back_populates="project_links")
+
+
+class ProjectDemandVersion(Base):
+    """项目客户需求版本（只增不改的快照序列）。
+
+    客户会改需求（V1.0 → V2.0），因此需求不再就地覆盖：**每保存一次追加一条完整的
+    12 月快照**，全站供需计算只认「当前版」（`is_current = 1`，由部分唯一索引保证
+    同一项目至多一条）。
+
+    ★ 只有客户需求版本化。BOM 系数（项目×物料）与供应商产能（物料×供应商）恒定，
+      不参与版本化 —— 所以版本切换只动需求侧：
+          物料需求 = 客户需求 × BOM      → 随版本等比缩放
+          供应系数 = 产能 ÷ 需求          → 版本一变系数立刻变
+      这也意味着「版本对比」天然就是「风险对比」，不需要额外字段。
+
+    ★ 与旧字段的关系（双写投影）：
+      本表是唯一真相源；`project_supply_relations.demand` 降级为「当前版的投影副本」，
+      写版本时同步回写。这样既有消费方（供需首页聚合 / 项目详情物料聚合 /
+      物料弹窗 / 库存信号塔按 BOM 折算 / Excel 导入 / 需求折线）**零改动继续可用**。
+
+    排序与「取上一版」一律用 `seq`（项目内自增），不用 `version_no` —— 后者可由人
+    工改成 2.0 这类值，仅作展示，避免手填错版本号搞乱顺序。
+    """
+
+    __tablename__ = "project_demand_versions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "seq", name="uq_demand_version_project_seq"),
+        # 部分唯一索引：同一项目至多一条「当前版」（与 uq_products_sku_active 同款写法）
+        Index("uq_demand_version_current", "project_id", unique=True, sqlite_where=text("is_current = 1")),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, comment="项目内自增序号（排序 / 取上一版一律用它）")
+    version_no: Mapped[str] = mapped_column(String(32), nullable=False, comment="展示用版本号，如 1.0 / 2.0（可人工改）")
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="版本说明，如「客户 10 月调产」")
+    demand: Mapped[str | None] = mapped_column(Text, nullable=True, comment="客户需求快照（1-12月 JSON 数组）")
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", comment="来源: manual/excel")
+    effective_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="生效日期")
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="当前版标记（同项目至多一条为真）")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="录入人（无登录体系，纯文本留痕）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="demand_versions")
 
 
 class ShareRecord(Base):

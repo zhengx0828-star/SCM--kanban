@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Boxes,
   FileSpreadsheet,
-  Loader2,
   Package,
   Plus,
   Save,
@@ -19,17 +18,22 @@ import { CHART_PALETTE } from "@/lib/chart-palette";
 import { MaterialDetailDialog } from "@/components/projects/MaterialDetailDialog";
 import { QuickAddRelationDialog } from "@/components/projects/QuickAddRelationDialog";
 import { DemandExcelImportDialog } from "@/components/projects/DemandExcelImportDialog";
+import { DemandVersionBar } from "@/components/projects/DemandVersionBar";
+import { CreateDemandVersionDialog } from "@/components/projects/CreateDemandVersionDialog";
+import { DemandCompareDialog } from "@/components/projects/DemandCompareDialog";
 import { SupplierDetailDialog } from "@/components/suppliers/SupplierDetailDialog";
 import { SiteHeader } from "@/components/site/SiteHeader";
 import { SiteSidebar } from "@/components/site/SiteSidebar";
 import {
+  useDemandVersions,
   useProjectRelations,
   useProjects,
-  useUpdateProjectDemand,
+  useSetCurrentDemandVersion,
 } from "@/hooks/use-projects";
 import { useSuppliers } from "@/hooks/use-suppliers";
-import { getApiErrorMessage } from "@/lib/utils";
+import { cn, getApiErrorMessage } from "@/lib/utils";
 import type { Supplier } from "@/types/supplier";
+import type { DemandVersion } from "@/types/project";
 
 /**
  * 供需管理 · 项目详情页。
@@ -65,27 +69,64 @@ export default function ProjectSupplyDetailPage() {
     isValid ? projectId : null
   );
 
-  /* ---- 草稿态 ---- */
+  /* ---- 需求版本链：所有供需计算都只认「当前版」 ---- */
+  const { data: versions = [] } = useDemandVersions(isValid ? projectId : null);
+  const currentVersion = useMemo(() => versions.find((v) => v.is_current) ?? null, [versions]);
+
+  /** 正在查看的版本 seq；null = 跟随当前版 */
+  const [viewingSeq, setViewingSeq] = useState<number | null>(null);
+  const viewedVersion = useMemo(
+    () => (viewingSeq != null ? versions.find((v) => v.seq === viewingSeq) ?? currentVersion : currentVersion),
+    [viewingSeq, versions, currentVersion]
+  );
+  const prevVersion = useMemo(() => {
+    if (!viewedVersion) return null;
+    let p: (typeof versions)[number] | null = null;
+    for (const v of versions) {
+      if (v.seq < viewedVersion.seq && (!p || v.seq > p.seq)) p = v;
+    }
+    return p;
+  }, [versions, viewedVersion]);
+
+  /** 没有版本的项目 = 尚未录入过需求，允许直接录入（保存时自动生成 V1.0） */
+  const editable = versions.length === 0 || !!viewedVersion?.is_current;
+
+  /* ---- 草稿态：取「正在查看的版本」，无版本时退回明细行冗余字段 ---- */
   const [demandDraft, setDemandDraft] = useState<number[] | null>(null);
+  const sourceDemand = viewedVersion?.demand ?? relations[0]?.demand ?? null;
+  const sourceKey = `${viewedVersion?.id ?? "none"}|${(sourceDemand ?? []).join(",")}`;
 
   useEffect(() => {
-    const first = relations[0]?.demand;
-    setDemandDraft(first && first.length === 12 ? [...first] : Array(12).fill(0));
-  }, [relations]);
+    setDemandDraft(sourceDemand && sourceDemand.length === 12 ? [...sourceDemand] : Array(12).fill(0));
+    // 只在「查看的版本」或「源数据」真正变化时重置草稿，避免无关的 refetch 把编辑中的草稿冲掉
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey]);
 
   /* ---- Mutations ---- */
-  const updateDemand = useUpdateProjectDemand(isValid ? projectId : null);
+  const setCurrentVersion = useSetCurrentDemandVersion(isValid ? projectId : null);
+  const [createVersionOpen, setCreateVersionOpen] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
 
-  const handleSaveDemand = () => {
-    if (!demandDraft) return;
-    updateDemand.mutate(
-      { demand: demandDraft },
-      {
-        onSuccess: () => toast.success("已保存客户需求"),
-        onError: (err) => toast.error(getApiErrorMessage(err)),
-      }
-    );
+  const handleSetCurrent = (version: DemandVersion) => {
+    setCurrentVersion.mutate(version.id, {
+      onSuccess: (updated) => {
+        toast.success(`已把 V${updated.version_no} 设为当前版，全站供需计算随之切换`);
+        setViewingSeq(updated.seq);
+      },
+      onError: (err) => toast.error(getApiErrorMessage(err)),
+    });
   };
+
+  const handleOpenCreate = () => {
+    if (!demandDraft) return;
+    setCreateVersionOpen(true);
+  };
+
+  /* ---- 与上一版的差异（年合计口径；产能与 BOM 恒定，所以差异只来自需求） ---- */
+  const viewedTotal = sumOf(demandDraft);
+  const prevTotal = sumOf(prevVersion?.demand);
+  const demandDelta = prevVersion ? viewedTotal - prevTotal : 0;
+  const demandDeltaPct = prevVersion && prevTotal ? (demandDelta / prevTotal) * 100 : null;
 
   /* ---- 派生：按物料聚合；物料需求 = demand × bom ---- */
   const projectDemand = relations[0]?.demand ?? null;
@@ -104,6 +145,20 @@ export default function ProjectSupplyDetailPage() {
 
   /* ---- 概览：未设 BOM 的物料数（保留原来列表行的关键信息） ---- */
   const noBomCount = useMemo(() => materialsByKey.filter((m) => m.bom == null).length, [materialsByKey]);
+
+  /* ---- 版本对比弹窗用：压平成「物料 + BOM + 产能合计」（产能与 BOM 恒定，两版共用） ---- */
+  const compareMaterials = useMemo(
+    () =>
+      materialsByKey.map((m) => ({
+        pn: m.pn,
+        name: m.name,
+        bom: m.bom,
+        capacity: Array.from({ length: 12 }, (_, t) =>
+          m.rows.reduce((s, r) => s + (r.capacity?.[t] ?? 0), 0)
+        ),
+      })),
+    [materialsByKey]
+  );
 
   /* ---- 弹窗：物料 dialog / 供应商 dialog ---- */
   const [openMaterialPn, setOpenMaterialPn] = useState<string | null>(null);
@@ -172,12 +227,33 @@ export default function ProjectSupplyDetailPage() {
             </section>
 
             <div className="mt-6 space-y-4">
-              {/* 卡 1：客户需求（项目级 1-12 月） */}
-              <Card>
+              {/* 卡 1：客户需求（项目级 1-12 月）· 版本下拉放卡头右侧（方案 §6.4 落点 ③） */}
+              {/* ★ 必须 overflow-visible：Card 基础类自带 overflow-hidden，
+                  会把绝对定位的版本下拉面板连同命中测试一起裁掉（AGENT.md 坑 22）。 */}
+              <Card className="overflow-visible">
                 <CardContent className="space-y-3 p-5">
-                  <div className="flex items-center gap-1.5 text-sm font-medium">
-                    <Package className="h-4 w-4" />
-                    客户需求（项目级 · 1-12 月）
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      <Package className="h-4 w-4" />
+                      客户需求（项目级 · 1-12 月）
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {versions.length === 0
+                        ? "尚未录入"
+                        : editable
+                          ? "当前版本可编辑"
+                          : "历史版本 · 只读"}
+                    </span>
+                    <DemandVersionBar
+                      className="ml-auto"
+                      versions={versions}
+                      viewingSeq={viewedVersion?.seq ?? null}
+                      onViewingSeqChange={setViewingSeq}
+                      onSetCurrent={handleSetCurrent}
+                      onCreate={handleOpenCreate}
+                      onCompare={() => setCompareOpen(true)}
+                      busy={setCurrentVersion.isPending}
+                    />
                   </div>
                   {demandDraft ? (
                     <div className="grid gap-1.5 grid-cols-6 sm:grid-cols-12">
@@ -188,6 +264,7 @@ export default function ProjectSupplyDetailPage() {
                             type="number"
                             min={0}
                             step="any"
+                            disabled={!editable}
                             value={Number.isFinite(demandDraft[i] ?? 0) ? demandDraft[i] : 0}
                             onChange={(e) => {
                               const next = [...demandDraft];
@@ -204,23 +281,37 @@ export default function ProjectSupplyDetailPage() {
                   ) : (
                     <Skeleton className="h-20" />
                   )}
-                  <div className="flex items-center justify-between border-t pt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
                     <p className="text-xs text-muted-foreground">
                       年合计：
                       <span className="ml-1 font-semibold tabular-nums text-foreground">
                         {sumOf(demandDraft).toLocaleString()}
                       </span>
-                      <span className="ml-2 text-[11px]">
-                        （录一次自动同步到该项目下所有供应明细行）
-                      </span>
-                    </p>
-                    <Button size="sm" onClick={handleSaveDemand} disabled={updateDemand.isPending}>
-                      {updateDemand.isPending ? (
-                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Save className="mr-1.5 h-4 w-4" />
+                      {prevVersion && (
+                        <span
+                          className={cn(
+                            "ml-2 font-medium tabular-nums",
+                            demandDelta > 0
+                              ? "text-red-600 dark:text-red-400"
+                              : demandDelta < 0
+                                ? "text-green-600 dark:text-green-400"
+                                : "text-muted-foreground"
+                          )}
+                        >
+                          较 V{prevVersion.version_no} {demandDelta > 0 ? "+" : ""}
+                          {demandDelta.toLocaleString("zh-CN")}
+                          {demandDeltaPct != null && `（${demandDeltaPct > 0 ? "+" : ""}${demandDeltaPct.toFixed(1)}%）`}
+                        </span>
                       )}
-                      保存客户需求
+                      {!editable && (
+                        <span className="ml-2 text-[11px]">
+                          历史版本只读；点「设为当前版」可切回这一版参与计算
+                        </span>
+                      )}
+                    </p>
+                    <Button size="sm" onClick={handleOpenCreate} disabled={!editable}>
+                      <Save className="mr-1.5 h-4 w-4" />
+                      {versions.length === 0 ? "保存需求（生成 V1.0）" : "另存为新版本"}
                     </Button>
                   </div>
                 </CardContent>
@@ -295,7 +386,8 @@ export default function ProjectSupplyDetailPage() {
               </div>
 
               <p className="pt-2 text-center text-xs text-muted-foreground">
-                修改 BOM / 供应商产能后点对应「保存」按钮提交；切换页面或返回项目列表未保存的编辑会丢失。
+                客户需求「另存为新版本」即生成新版本并置为当前版，历史版本永久只读；
+                修改 BOM / 供应商产能后点对应「保存」按钮提交。切换页面或返回项目列表，未保存的编辑会丢失。
               </p>
             </div>
           </div>
@@ -330,6 +422,26 @@ export default function ProjectSupplyDetailPage() {
         projectId={projectId}
         initialPn={quickAddPrefill.pn}
         initialMaterialName={quickAddPrefill.name}
+      />
+
+      {/* 版本对比（落点 ⑤：收进弹窗，不占页面；对比 = 折线 + 转置差异表 + 风险迁移） */}
+      <DemandCompareDialog
+        open={compareOpen}
+        onOpenChange={setCompareOpen}
+        versions={versions}
+        current={currentVersion}
+        materials={compareMaterials}
+        initialBaselineSeq={prevVersion?.seq ?? null}
+      />
+
+      {/* 另存为新版本（需求版本化的唯一写入入口） */}
+      <CreateDemandVersionDialog
+        open={createVersionOpen}
+        onOpenChange={setCreateVersionOpen}
+        projectId={projectId}
+        demand={demandDraft ?? Array(12).fill(0)}
+        versions={versions}
+        onCreated={(created) => setViewingSeq(created.seq)}
       />
 
       {/* 导入供需 Excel（需求 + BOM + 产能） */}

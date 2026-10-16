@@ -25,6 +25,7 @@ import type {
   ProjectBomUpdateInput,
   ProjectCreateInput,
   ProjectDemandUpdateInput,
+  ProjectDemandVersionSummary,
   ProjectListParams,
   ProjectListResponse,
   ProjectSupplyRelation,
@@ -32,6 +33,8 @@ import type {
   ProjectSupplyRelationQuickCreateInput,
   ProjectSupplyRelationUpdateInput,
   ProjectUpdateInput,
+  DemandVersion,
+  DemandVersionCreateInput,
 } from "../types/project";
 import type {
   Rule,
@@ -245,6 +248,36 @@ export const projectApi = {
   updateDemand(projectId: number, data: ProjectDemandUpdateInput) {
     return apiClient
       .put<ProjectSupplyRelation[]>(`/projects/${projectId}/demand`, data)
+      .then((res) => res.data);
+  },
+
+  /** 项目的客户需求版本链（新版在前，含 is_current） */
+  demandVersions(projectId: number) {
+    return apiClient
+      .get<DemandVersion[]>(`/projects/${projectId}/demand-versions`)
+      .then((res) => res.data);
+  },
+
+  /** 各项目的需求版本摘要（首页项目卡片 / 客户需求区块用，一次拿全部） */
+  demandVersionSummary(projectIds?: number[]) {
+    return apiClient
+      .get<ProjectDemandVersionSummary[]>("/projects/demand-version-summary", {
+        params: projectIds && projectIds.length ? { project_ids: projectIds.join(",") } : undefined,
+      })
+      .then((res) => res.data);
+  },
+
+  /** 新建一个客户需求版本（只增不改；项目首版自动成为当前版） */
+  createDemandVersion(projectId: number, data: DemandVersionCreateInput) {
+    return apiClient
+      .post<DemandVersion>(`/projects/${projectId}/demand-versions`, data)
+      .then((res) => res.data);
+  },
+
+  /** 把某个需求版本设为当前版（全站供需计算随之切换） */
+  setCurrentDemandVersion(projectId: number, versionId: number) {
+    return apiClient
+      .post<DemandVersion>(`/projects/${projectId}/demand-versions/${versionId}/set-current`)
       .then((res) => res.data);
   },
 

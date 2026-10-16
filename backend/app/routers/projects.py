@@ -20,7 +20,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
@@ -30,16 +30,20 @@ from ..models import (
     InventoryPlan,
     Material,
     Project,
+    ProjectDemandVersion,
     ProjectSupplyRelation,
     ShareRecord,
     Supplier,
     SupplyRelation,
 )
 from ..schemas import (
+    DemandVersionCreate,
+    DemandVersionRead,
     MaterialRead,
     ProjectBomUpdate,
     ProjectCreate,
     ProjectDemandUpdate,
+    ProjectDemandVersionSummary,
     ProjectList,
     ProjectRead,
     ProjectSupplyRelationCreate,
@@ -130,6 +134,145 @@ def _link_to_read(link: ProjectSupplyRelation) -> ProjectSupplyRelationRead:
     )
 
 
+# --------------------------------------------------------------------------- #
+#  客户需求版本（只增不改的快照序列）辅助函数                                    #
+# --------------------------------------------------------------------------- #
+
+
+def _version_to_read(ver: ProjectDemandVersion) -> DemandVersionRead:
+    """需求版本 ORM → 响应模型（附 12 月合计，供版本下拉直接显示）。"""
+    months = _json_to_list(ver.demand) or []
+    return DemandVersionRead(
+        id=ver.id,
+        project_id=ver.project_id,
+        seq=ver.seq,
+        version_no=ver.version_no,
+        label=ver.label,
+        demand=_json_to_list(ver.demand),
+        source=ver.source,
+        effective_date=ver.effective_date,
+        is_current=ver.is_current,
+        note=ver.note,
+        created_by=ver.created_by,
+        year_total=round(sum(months), 2),
+        created_at=ver.created_at,
+    )
+
+
+def _versions_of(db: Session, project_id: int) -> list[ProjectDemandVersion]:
+    """某项目的全部版本，按 seq 倒序（新版在前）。排序一律用 seq，不用 version_no。"""
+    return list(
+        db.execute(
+            select(ProjectDemandVersion)
+            .where(ProjectDemandVersion.project_id == project_id)
+            .order_by(ProjectDemandVersion.seq.desc())
+        ).scalars().all()
+    )
+
+
+def _suggest_version_no(versions: list[ProjectDemandVersion]) -> str:
+    """按上一版 +0.1 建议版本号（如 1.0 → 1.1）；上一版号不可解析时退回「seq+1.0」。
+
+    仅作**建议**：调用方可以传自己的 version_no（如直接跳到 2.0）。
+    """
+    if not versions:
+        return "1.0"
+    top = versions[0]
+    try:
+        return f"{round(float(top.version_no) + 0.1, 1):.1f}"
+    except (TypeError, ValueError):
+        return f"{top.seq + 1}.0"
+
+
+def _demand_version_create(
+    db: Session,
+    project_id: int,
+    *,
+    demand_json: str | None,
+    version_no: str | None,
+    label: str | None,
+    source: str,
+    effective_date,
+    note: str | None,
+    set_current: bool,
+) -> ProjectDemandVersion:
+    """追加一个需求版本；`set_current` 或「项目首版」时置为当前版并回写投影。
+
+    ★ 顺序很重要：先以 is_current=0 插入并 flush，再清旧当前版、最后置新当前版 ——
+      部分唯一索引 `uq_demand_version_current` 在每条语句后校验，顺序错了会撞唯一约束。
+    ★ flush 不能省：sessionmaker(autoflush=False)，不 flush 的话后面的 SELECT 看不到新行。
+    """
+    versions = _versions_of(db, project_id)
+    next_seq = (versions[0].seq + 1) if versions else 1
+    ver = ProjectDemandVersion(
+        project_id=project_id,
+        seq=next_seq,
+        version_no=(version_no or "").strip() or _suggest_version_no(versions),
+        label=(label or "").strip() or ("初始版" if not versions else "手工录入"),
+        demand=demand_json,
+        source=source,
+        effective_date=effective_date,
+        note=note,
+        is_current=False,
+    )
+    db.add(ver)
+    db.flush()
+
+    # 项目首版强制为当前版，否则不允许出现「有版本但没有当前版」的项目
+    if set_current or not versions:
+        db.execute(
+            update(ProjectDemandVersion)
+            .where(
+                ProjectDemandVersion.project_id == project_id,
+                ProjectDemandVersion.is_current.is_(True),
+                ProjectDemandVersion.id != ver.id,
+            )
+            .values(is_current=False)
+        )
+        ver.is_current = True
+
+    db.commit()
+    db.refresh(ver)
+
+    if ver.is_current:
+        _write_demand_projection(db, project_id, demand_json)
+    return ver
+
+
+def _write_demand_projection(db: Session, project_id: int, demand_json: str | None) -> None:
+    """把当前版需求回写到 `project_supply_relations.demand`（兼容层 / 投影副本）。
+
+    版本表是唯一真相源，这里只是让既有消费方（供需首页聚合、物料弹窗、库存信号塔
+    按 BOM 折算、Excel 导入、需求折线）无需改动即可继续读到「当前版」。
+    """
+    db.execute(
+        update(ProjectSupplyRelation)
+        .where(ProjectSupplyRelation.project_id == project_id)
+        .values(demand=demand_json)
+    )
+    db.commit()
+
+
+def _ensure_current_version(db: Session, project_id: int) -> None:
+    """兜底：保证项目存在当前版（老数据迁移后仍可能为空 —— 不造假数据，直接跳过）。"""
+    current = db.execute(
+        select(ProjectDemandVersion).where(
+            ProjectDemandVersion.project_id == project_id,
+            ProjectDemandVersion.is_current.is_(True),
+        )
+    ).scalars().first()
+    if current is not None:
+        return
+    fallback = db.execute(
+        select(ProjectDemandVersion)
+        .where(ProjectDemandVersion.project_id == project_id)
+        .order_by(ProjectDemandVersion.seq.desc())
+    ).scalars().first()
+    if fallback is not None:
+        fallback.is_current = True
+        db.commit()
+
+
 @router.get("", response_model=ProjectList, summary="分页查询项目")
 def list_projects(
     db: Session = Depends(get_db),
@@ -209,6 +352,8 @@ def delete_project(project_id: int, db: Session = Depends(get_db)) -> None:
         db.execute(delete(InventoryDay).where(InventoryDay.plan_id.in_(plan_ids)))
         db.execute(delete(InventoryPlan).where(InventoryPlan.id.in_(plan_ids)))
     db.execute(delete(ShareRecord).where(ShareRecord.project_id == project_id))
+    # 客户需求版本链（只增不改，但项目都没了就一起清，避免孤儿行被新项目复用 project_id 时继承）
+    db.execute(delete(ProjectDemandVersion).where(ProjectDemandVersion.project_id == project_id))
 
     # ★ 记录本项目挂载过的供应关系，供删项目后清理孤儿主数据（L2/L1）。
     #   必须在 db.delete(project) 之前取，级联删掉 project_supply_relations 后就查不到了。
@@ -538,7 +683,12 @@ def update_project_demand(
 ) -> list[ProjectSupplyRelationRead]:
     """客户需求是「项目级」数据：客户给的是产品总需求，1 台产品需要多少个该物料由 BOM 系数体现。
 
-    录入一次即同步到该项目下所有供应明细行（不区分物料；每行冗余存同一份客户需求）。
+    ★ 2026-10-16 起语义升级为「**生成新版本 + 设为当前版**」（需求版本化）：
+      - 不再就地覆盖 —— 每次保存追加一条完整 12 月快照，历史版本永久保留；
+      - 当前版随 12 月数据一起，投影回写到该项目各供应明细行的 `demand` 字段，
+        因此老调用方（前端保存按钮、Excel 导入）无需改动即可继续工作；
+      - 可选的 `version_no / label / effective_date / source` 用于把版本信息一起带进来，
+        不传则由服务端按「上一版 +0.1」自动生成。
     """
     _get_project(db, project_id)
 
@@ -553,16 +703,166 @@ def update_project_demand(
     if not links:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"项目 {project_id} 下没有任何供应明细，请先挂载物料-供应商关系")
 
-    demand_json = _list_to_json(payload.demand)
-    for link in links:
-        link.demand = demand_json
-    db.commit()
+    _demand_version_create(
+        db,
+        project_id,
+        demand_json=_list_to_json(payload.demand),
+        version_no=payload.version_no,
+        label=payload.label,
+        source=payload.source,
+        effective_date=payload.effective_date,
+        note=None,
+        set_current=True,
+    )
 
     stmt = select(ProjectSupplyRelation).options(*_LINK_LOAD).where(
         ProjectSupplyRelation.project_id == project_id,
     )
     updated = db.execute(stmt).scalars().all()
     return [_link_to_read(l) for l in updated]
+
+
+# --------------------------------------------------------------------------- #
+#  客户需求版本链（只增不改）                                                    #
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/demand-version-summary",
+    response_model=list[ProjectDemandVersionSummary],
+    summary="各项目的需求版本摘要（首页项目卡片 / 客户需求区块用，一次拿全部）",
+)
+def demand_version_summary(
+    db: Session = Depends(get_db),
+    project_ids: Optional[str] = Query(None, description="逗号分隔的项目 ID；不传 = 全部项目"),
+) -> list[ProjectDemandVersionSummary]:
+    """首页多项目同屏，逐项目拉版本列表会有 N 次请求，故提供批量摘要。
+
+    没有版本的项目也会出现在结果里（`version_count = 0`），
+    前端据此渲染「尚未录入需求」的空态，而不是当成接口失败。
+    """
+    if project_ids:
+        ids = [int(x) for x in project_ids.split(",") if x.strip().lstrip("-").isdigit()]
+        if not ids:
+            return []
+    else:
+        ids = list(db.execute(select(Project.id).order_by(Project.id)).scalars().all())
+    if not ids:
+        return []
+
+    rows = db.execute(
+        select(ProjectDemandVersion)
+        .where(ProjectDemandVersion.project_id.in_(ids))
+        .order_by(ProjectDemandVersion.project_id, ProjectDemandVersion.seq.desc())
+    ).scalars().all()
+    grouped: dict[int, list[ProjectDemandVersion]] = {}
+    for v in rows:
+        grouped.setdefault(v.project_id, []).append(v)  # 已按 seq 倒序
+
+    out: list[ProjectDemandVersionSummary] = []
+    for pid in ids:
+        vers = grouped.get(pid, [])
+        if not vers:
+            out.append(ProjectDemandVersionSummary(project_id=pid, version_count=0))
+            continue
+        current = next((v for v in vers if v.is_current), vers[0])  # 兜底取最新一版
+        prev = next((v for v in vers if v.seq < current.seq), None)
+        cur_total = round(sum(_json_to_list(current.demand) or []), 2)
+        prev_total = round(sum(_json_to_list(prev.demand) or []), 2) if prev else None
+        delta = round(cur_total - prev_total, 2) if prev_total is not None else None
+        delta_pct = (
+            round(delta / prev_total * 100, 2)
+            if (delta is not None and prev_total)
+            else None
+        )
+        out.append(
+            ProjectDemandVersionSummary(
+                project_id=pid,
+                version_count=len(vers),
+                current_version_no=current.version_no,
+                current_label=current.label,
+                current_effective_date=current.effective_date,
+                current_year_total=cur_total,
+                prev_year_total=prev_total,
+                delta=delta,
+                delta_pct=delta_pct,
+            )
+        )
+    return out
+
+
+@router.get(
+    "/{project_id}/demand-versions",
+    response_model=list[DemandVersionRead],
+    summary="查询项目的客户需求版本链（新版在前）",
+)
+def list_demand_versions(project_id: int, db: Session = Depends(get_db)) -> list[DemandVersionRead]:
+    _get_project(db, project_id)
+    _ensure_current_version(db, project_id)
+    return [_version_to_read(v) for v in _versions_of(db, project_id)]
+
+
+@router.post(
+    "/{project_id}/demand-versions",
+    response_model=DemandVersionRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="新建一个客户需求版本（只增不改；首版自动成为当前版）",
+)
+def create_demand_version(
+    project_id: int, payload: DemandVersionCreate, db: Session = Depends(get_db)
+) -> DemandVersionRead:
+    _get_project(db, project_id)
+    ver = _demand_version_create(
+        db,
+        project_id,
+        demand_json=_list_to_json(payload.demand),
+        version_no=payload.version_no,
+        label=payload.label,
+        source=payload.source,
+        effective_date=payload.effective_date,
+        note=payload.note,
+        set_current=payload.set_current,
+    )
+    return _version_to_read(ver)
+
+
+@router.post(
+    "/{project_id}/demand-versions/{version_id}/set-current",
+    response_model=DemandVersionRead,
+    summary="把某个客户需求版本设为当前版（全站供需计算随之切换）",
+)
+def set_current_demand_version(
+    project_id: int, version_id: int, db: Session = Depends(get_db)
+) -> DemandVersionRead:
+    _get_project(db, project_id)
+    ver = db.execute(
+        select(ProjectDemandVersion).where(
+            ProjectDemandVersion.id == version_id,
+            ProjectDemandVersion.project_id == project_id,
+        )
+    ).scalars().first()
+    if ver is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"需求版本 {version_id} 不存在")
+
+    if ver.is_current:
+        return _version_to_read(ver)
+
+    # ★ 先清旧当前版，再置新当前版 —— 部分唯一索引逐语句校验，顺序反了会撞约束
+    db.execute(
+        update(ProjectDemandVersion)
+        .where(
+            ProjectDemandVersion.project_id == project_id,
+            ProjectDemandVersion.is_current.is_(True),
+        )
+        .values(is_current=False)
+    )
+    ver.is_current = True
+    db.commit()
+    db.refresh(ver)
+
+    # 切换当前版 = 切换全站口径，同步把投影回写
+    _write_demand_projection(db, project_id, ver.demand)
+    return _version_to_read(ver)
 
 
 @router.put(
@@ -621,9 +921,13 @@ def delete_project_relation(project_id: int, link_id: int, db: Session = Depends
 #                    **不会新建物料-供应商关系**——关系不存在时导入会报错跳过。
 #
 # 两个 sheet：
-#   `客户需求`        项目代码 | 1月 … 12月            （项目级，一行一个项目）
+#   `客户需求`        项目代码 | 1月 … 12月 | 版本号 | 版本说明 | 生效日期
+#                     （项目级，一行一个项目；末尾三列可选，留空由服务端自动编号）
 #   `物料BOM与产能`   项目代码 | 物料PN | 物料名称 | BOM系数 | 供应商代码 | 供应商名称 |
 #                     产能_1月 … 产能_12月            （一行 = 项目×物料×供应商）
+#
+# ★ 2026-10-16 需求版本化后：「客户需求」sheet 的导入语义已从「覆盖」升级为
+#   「生成新版本 + 设为当前版」，末尾三列用于给这一版打标签。
 
 _DEMAND_TEMPLATE_MONTHS = [f"{i}月" for i in range(1, 13)]
 
@@ -650,26 +954,34 @@ def demand_import_template() -> Response:
     center = Alignment(horizontal="center", vertical="center")
 
     # ---- sheet 1：客户需求（项目级 · 1-12 月）----
+    # 末尾三列是**需求版本化**（2026-10-16）新增的可选元信息：留空则由服务端自动编号。
+    # 导入语义已升级为「生成新版本」，不再覆盖当前需求。
     ws1 = wb.active
     ws1.title = "客户需求"
-    cols1 = ["项目代码", *_DEMAND_TEMPLATE_MONTHS]
+    cols1 = ["项目代码", *_DEMAND_TEMPLATE_MONTHS, "版本号", "版本说明", "生效日期"]
     for i, label in enumerate(cols1, start=1):
         cell = ws1.cell(row=1, column=i, value=label)
         cell.fill = head_fill
         cell.font = head_font
         cell.alignment = center
-    demo1 = ["PRJ-示例", 500, 600, 550, 500, 480, 500, 520, 560, 700, 800, 780, 900]
+    demo1 = ["PRJ-示例", 500, 600, 550, 500, 480, 500, 520, 560, 700, 800, 780, 900,
+             "1.0", "初始版 / 客户 FY26 预测", "2026-06-01"]
     for i, val in enumerate(demo1, start=1):
         ws1.cell(row=2, column=i, value=val).font = demo_font
     ws1.cell(
         row=4, column=1,
         value="填写说明：① 一行 = 一个项目；项目代码必须是系统里已存在的（见「供应商列表 · 项目」）。"
               "② 1-12 月填客户需求量，留空 = 0。③ 需求是项目级数据，录一次自动同步到该项目下所有物料明细行。"
-              "④ 灰色示例行务必删除。",
+              "④ 末尾三列（版本号 / 版本说明 / 生效日期）可留空 —— 留空由系统自动编号；"
+              "【重要】导入不会覆盖现有需求，而是**生成一个新的版本**并置为当前版，历史版本永久保留。"
+              "⑤ 灰色示例行务必删除。",
     ).font = note_font
     ws1.column_dimensions["A"].width = 16
     for i in range(2, 14):
         ws1.column_dimensions[get_column_letter(i)].width = 9
+    known = [("N", 10), ("O", 26), ("P", 13)]
+    for col, w in known:
+        ws1.column_dimensions[col].width = w
     ws1.freeze_panes = "B2"
 
     # ---- sheet 2：物料BOM与产能（项目 × 物料 × 供应商）----

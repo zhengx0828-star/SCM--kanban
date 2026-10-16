@@ -29,13 +29,15 @@ import type { ProjectSupplyRelation } from "@/types/project";
  *                      **不新建任何物料-供应商关系**——关系不存在时该行报错跳过。
  *
  * 两个工作表：
- *   `客户需求`       项目代码 | 1月 … 12月                     （项目级，一行一个项目）
+ *   `客户需求`       项目代码 | 1月 … 12月 | 版本号 | 版本说明 | 生效日期   （项目级，一行一个项目）
  *   `物料BOM与产能`  项目代码 | 物料PN | 物料名称 | BOM系数 |
  *                    供应商代码 | 供应商名称 | 产能_1月 … 产能_12月
  *                                                             （一行 = 项目×物料×供应商）
  *
  * 语义：
- *   - 需求/S 是项目级 → 走 PUT /projects/{id}/demand（一次覆盖该项目全部月份）
+ *   - 需求/S 是项目级 → 走 PUT /projects/{id}/demand
+ *     ★ 需求版本化（2026-10-16）后语义升级：**生成新版本并置为当前版，不再覆盖**；
+ *       末尾三列（版本号 / 版本说明 / 生效日期）可留空，留空由服务端自动编号。
  *   - BOM 是项目×物料级 → 走 PUT /projects/{id}/bom（同步到该物料所有行）
  *   - 产能是明细级 → 走 PATCH /projects/{id}/relations/{linkId}（整行覆盖该明细的 12 月产能）
  *   - 关系不存在 → 该行记入失败清单，**不静默创建**（职责分离）
@@ -65,10 +67,32 @@ function toNum(s: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * 归一化日期：只接受 `YYYY-MM-DD` 原样透传给后端（pydantic `date`）。
+ *
+ * Excel 里日期常被读成序列号或本地化字符串（`2026/6/1`），直接透传会 422；
+ * 这里**只做保守的格式转换，不猜语义** —— 认不出来就丢弃（版本生效日期本就是可选项）。
+ */
+function normalizeDate(s: string): string | null {
+  const t = s.trim();
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const m = t.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/);
+  if (m) {
+    const p = (n: string) => n.padStart(2, "0");
+    return `${m[1]}-${p(m[2])}-${p(m[3])}`;
+  }
+  return null;
+}
+
 /* ------------------------------- 解析：客户需求 ------------------------------- */
 interface DemandRow {
   project_code: string;
   months: number[]; // length 12
+  /** 可选版本元信息（需求版本化）：留空由服务端自动编号 */
+  version_no: string;
+  version_label: string;
+  effective_date: string;
 }
 
 function parseDemandSheet(sheet: unknown): DemandRow[] {
@@ -81,7 +105,13 @@ function parseDemandSheet(sheet: unknown): DemandRow[] {
     const months = MONTHS.map((i) =>
       toNum(pick(r, `${i + 1}月`, `${i + 1} 月`, `M${i + 1}`, `${i + 1}`))
     );
-    rows.push({ project_code, months });
+    rows.push({
+      project_code,
+      months,
+      version_no: pick(r, "版本号", "版本"),
+      version_label: pick(r, "版本说明", "版本备注", "说明"),
+      effective_date: pick(r, "生效日期", "生效时间"),
+    });
   }
   return rows;
 }
@@ -235,7 +265,15 @@ export function DemandExcelImportDialog({ open, onOpenChange, projectId, project
         continue;
       }
       try {
-        await demandMutation.mutateAsync({ demand: r.months });
+        // ★ 需求版本化后：导入不再覆盖，而是生成一个新版本并置为当前版（source=excel 留痕）。
+        //   sheet 里的「版本号 / 版本说明 / 生效日期」为可选项，留空由服务端自动编号。
+        await demandMutation.mutateAsync({
+          demand: r.months,
+          source: "excel",
+          version_no: r.version_no || null,
+          label: r.version_label || `Excel 导入 · ${fileName || "客户需求"}`,
+          effective_date: normalizeDate(r.effective_date),
+        });
         success++;
       } catch (err) {
         failed.push({ sheet: "客户需求", row: excelRow, label: r.project_code, error: getApiErrorMessage(err) });

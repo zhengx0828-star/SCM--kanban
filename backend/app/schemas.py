@@ -9,6 +9,8 @@ ProductStatus = Literal["active", "inactive", "archived"]
 # 供应商风险等级（地图点位红黄绿）。None = 未评估；判定规则未定，录入不要求提供
 SupplierRiskLevel = Literal["red", "yellow", "green"]
 ProjectStatus = Literal["active", "planning", "closed"]
+# 需求版本来源：手工录入 / Excel 导入
+SourceOfDemandVersion = Literal["manual", "excel"]
 
 
 class ProductBase(BaseModel):
@@ -379,9 +381,68 @@ class ProjectDemandUpdate(BaseModel):
 
     客户需求是项目级数据：客户给的是产品总需求，1 台产品需要多少个该物料由 BOM 系数体现。
     录入时按项目录一次，自动同步到该项目下所有供应明细行。
+
+    ★ 2026-10-16 起语义升级：本接口不再「就地覆盖」，而是**生成一个新的需求版本**
+      并置为当前版（需求版本化，见 docs/demand-versioning/01-方案定稿.md）。
+      同时把当前版投影回写 `project_supply_relations.demand`，老调用方无需改动。
     """
 
     demand: list[float] = Field(..., min_length=12, max_length=12, description="客户需求（1-12月）")
+    version_no: Optional[str] = Field(None, max_length=32, description="版本号；不填按上一版 +0.1 自动生成")
+    label: Optional[str] = Field(None, max_length=200, description="版本说明；不填自动取「初始版」/「手工录入」")
+    source: SourceOfDemandVersion = Field("manual", description="来源：手工录入 / Excel 导入")
+    effective_date: Optional[date] = Field(None, description="生效日期")
+
+
+# ---------------------------------------------------------------------------
+# 客户需求版本（供需管理模块 · 只增不改的快照序列）
+# ---------------------------------------------------------------------------
+
+class DemandVersionCreate(BaseModel):
+    """新建一个需求版本（只增不改）。"""
+
+    demand: list[float] = Field(..., min_length=12, max_length=12, description="客户需求快照（1-12月）")
+    version_no: Optional[str] = Field(None, max_length=32, description="版本号；不填按上一版 +0.1 自动生成")
+    label: Optional[str] = Field(None, max_length=200, description="版本说明")
+    source: SourceOfDemandVersion = Field("manual", description="来源：手工录入 / Excel 导入")
+    effective_date: Optional[date] = Field(None, description="生效日期")
+    note: Optional[str] = Field(None, description="备注")
+    set_current: bool = Field(True, description="是否同时设为当前版（项目首版强制为当前版）")
+
+
+class DemandVersionRead(BaseModel):
+    """需求版本响应。"""
+
+    id: int
+    project_id: int
+    seq: int
+    version_no: str
+    label: Optional[str] = None
+    demand: Optional[list[float]] = None
+    source: str
+    effective_date: Optional[date] = None
+    is_current: bool
+    note: Optional[str] = None
+    created_by: Optional[str] = None
+    year_total: float = Field(0, description="12 个月合计（版本下拉直接显示用）")
+    created_at: datetime
+
+
+class ProjectDemandVersionSummary(BaseModel):
+    """项目需求版本摘要（供需管理首页项目卡片 / 客户需求区块用，一次拿全部项目）。
+
+    首页是多项目同屏，逐项目串行拉版本列表会有 N 次请求，故单开一个批量摘要接口。
+    """
+
+    project_id: int
+    version_count: int = Field(0, description="该项目已有几个版本")
+    current_version_no: Optional[str] = None
+    current_label: Optional[str] = None
+    current_effective_date: Optional[date] = None
+    current_year_total: Optional[float] = None
+    prev_year_total: Optional[float] = None
+    delta: Optional[float] = Field(None, description="当前版 − 上一版（年合计），无上一版为 None")
+    delta_pct: Optional[float] = Field(None, description="变化百分比；上一版为 0 时为 None")
 
 
 class ProjectBomUpdate(BaseModel):

@@ -27,7 +27,7 @@ import { SupplyCoefHeatmap } from "@/components/projects/SupplyCoefHeatmap";
 import { SiteHeader } from "@/components/site/SiteHeader";
 import { SiteSidebar } from "@/components/site/SiteSidebar";
 import { projectApi } from "@/lib/api";
-import { useProjectRelations, useProjects } from "@/hooks/use-projects";
+import { useDemandVersionSummary, useProjectRelations, useProjects } from "@/hooks/use-projects";
 import {
   buildMaterialRisk,
   summarizeSupplyRisk,
@@ -36,7 +36,7 @@ import {
 } from "@/lib/supply-risk";
 import { cn } from "@/lib/utils";
 import { CHART_PALETTE } from "@/lib/chart-palette";
-import type { Project, ProjectStatus } from "@/types/project";
+import type { Project, ProjectDemandVersionSummary, ProjectStatus } from "@/types/project";
 
 /**
  * 供需管理 · 入口页。
@@ -46,16 +46,19 @@ import type { Project, ProjectStatus } from "@/types/project";
  *      · 有缺口物料 / 最严重缺口（按缺口比例）/ 全年产能覆盖率 / 首个缺口月份
  *      · 数据范围恒为**全部项目**（老板一打开就有东西看，不受下方筛选影响）
  *   2) 项目卡片网格 —— 点击进入项目详情（录客户需求 / BOM / 产能）
- *   3) 明细分析 —— 项目/物料双下拉 + **两个始终展开**的内容块
- *      · 客户需求（折线，**始终呈现**：未选项目时看全部项目，选了就收窄）
- *      · 物料供需分析（柱+折线）→ **供应系数热力图**（就在图下方）
+ *   3) 明细分析 —— 筛选器**内嵌在两张内容卡的卡头**（2026-10-16 改版：删除了
+ *      「明细分析」标题行与那张独立筛选卡）
+ *      · 客户需求（折线）          卡头右侧 = 「项目」下拉
+ *      · 物料供需分析（柱+折线 + 供应系数热力图）卡头右侧 = 「项目 + 物料」下拉
+ *      · 两处「项目」读写**同一份** selectedProjectIds → 改一处两处同步
  *
  * 关键口径（2026-10-14 第二版，与用户确认）：
  *   · **供应系数 = 产能 ÷ 需求**，热力图格内直接写这个数（0.85 = 只够需求的 85%）
  *   · 三档 + 无数据：< 1.0 缺口(红) / 1.0-1.3 紧张(黄) / > 1.3 充足(绿) / 需求 0(灰)
  *   · 热力图**只列所选物料**；**没做下拉筛选就不出内容**（默认项目、物料均为空）
- *   · **例外**：客户需求区块一直呈现（用户明确要求），不受"没筛选就不出内容"约束
- *   · 明细区块**不再折叠** —— 可"展开/收起"的只有两个下拉选择器本身
+ *   · 2026-10-16 改：客户需求区块**不再"始终呈现"** —— 未选项目时同样只给空态引导，
+ *     全页面口径统一（下拉面板自带「全选」，一键即可看全部项目，能力没有丢）
+ *   · 明细区块**不再折叠** —— 筛选器内嵌卡头，入口始终可见（0/N 也保留）
  *   · 原「Supply Studio 明细」表已移除，信息并入供应系数热力图
  *   · 汇总复用项目卡片同一批 relations 缓存 → **零额外请求**
  */
@@ -175,12 +178,40 @@ export default function SupplyDemandPage() {
   const noMaterialRelation = hasProjectSelected && allMaterials.length === 0;
   const noSupplyData = materialAggregates.length === 0 && supplierAggregates.length === 0;
 
-  /* ---- 客户需求：**始终呈现**（用户要求）----
-     未选项目 → 看全部项目；选了项目 → 收窄到所选项目。
-     两条数据都已在上方取过（同一 queryKey 缓存），不产生额外请求。 */
-  const demandRelations = hasProjectSelected ? detailRelations : overviewRelations;
-  const demandProjectIds = hasProjectSelected ? selectedProjectIds : allProjectIds;
-  const demandLoading = hasProjectSelected ? loadingRelations : overviewLoading;
+  /* ---- 客户需求：与物料供需分析**共用** detailRelations / selectedProjectIds ----
+     2026-10-16 改：不再"未选项目就看全部项目"，未选即空态（两卡口径统一）。 */
+
+  /* ---- 需求版本摘要：项目卡片（落点 ①）与客户需求区块（落点 ②）共用，一次请求拿全部 ---- */
+  const projectIdList = useMemo(() => projects.map((p) => p.id), [projects]);
+  const { data: versionSummaries = [] } = useDemandVersionSummary(projectIdList);
+  const versionByProject = useMemo(() => {
+    const m = new Map<number, ProjectDemandVersionSummary>();
+    for (const s of versionSummaries) m.set(s.project_id, s);
+    return m;
+  }, [versionSummaries]);
+
+  /**
+   * 客户需求区块的版本口径文案（方案 §6.5）。
+   *
+   * ★ 版本链是项目级的，「当前版」逐项目各不相同，所以全项目汇总时
+   *   **不能写单一版本号** —— 否则会让人误以为全站同版。
+   */
+  const demandScopeSubtitle = useMemo(() => {
+    const ids = Array.from(selectedProjectIds).map(Number);
+    const total = ids.length;
+    if (total === 0) return undefined;
+    const prefix = `${total} 个项目`;
+    const vers = ids.map((id) => versionByProject.get(id));
+    const withVer = vers.filter((v) => !!v?.current_version_no) as ProjectDemandVersionSummary[];
+    if (total === 1) {
+      return withVer.length ? `${prefix} · 需求 V${withVer[0].current_version_no}` : `${prefix} · 需求未录入`;
+    }
+    if (withVer.length === 0) return `${prefix} · 需求未录入`;
+    if (withVer.length < total) return `${prefix} · 部分未录入需求`;
+    const nos = Array.from(new Set(withVer.map((v) => v.current_version_no!)));
+    if (nos.length === 1) return `${prefix} · 均按需求 V${nos[0]}`;
+    return `${prefix} · 版本不一（${[...nos].sort().map((n) => `V${n}`).join(" / ")}）`;
+  }, [hasProjectSelected, selectedProjectIds, projects, versionByProject]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -221,6 +252,7 @@ export default function SupplyDemandPage() {
                     <ProjectCard
                       key={p.id}
                       project={p}
+                      version={versionByProject.get(p.id)}
                       onClick={() => navigate(`/supply-demand/projects/${p.id}`)}
                     />
                   ))}
@@ -231,22 +263,18 @@ export default function SupplyDemandPage() {
               </>
             )}
 
-            {/* 3) 明细分析：选项目 + 选物料 → 图表 + 供应系数热力图 */}
+            {/* 3) 明细分析：筛选器内嵌到两张内容卡的卡头（2026-10-16 删除「明细分析」标题行
+                与那张独立筛选卡）。★ 两卡都必须 overflow-visible —— 下拉面板是
+                absolute + top-full 向下展开，空态时卡高只有 ~120px，overflow-hidden
+                会把面板整块裁掉（AGENT.md 坑 22）。 */}
             {projects.length > 0 && (
-              <div id="supply-detail" className="scroll-mt-20">
-                <div className="mt-8 flex items-center gap-2">
-                  <h2 className="text-sm font-medium">明细分析</h2>
-                  <span className="text-xs text-muted-foreground">
-                    客户需求始终展示；物料供需图与热力图需先选项目与物料
-                  </span>
-                </div>
-
-                {/* ★ 必须是 overflow-visible：Card 基础类自带 overflow-hidden，
-                    会把下拉面板（absolute 定位、向下超出卡片）整块裁掉 ——
-                    表现就是"点开下拉只看到搜索框、选项列表不见了"，项目和物料都选不了。
-                    cn() 走 twMerge，后写的 overflow-visible 会覆盖基础类的 overflow-hidden。 */}
-                <Card className="mt-3 overflow-visible">
-                  <CardContent className="flex flex-col gap-5 p-4 sm:flex-row sm:items-start sm:gap-8">
+              <div id="supply-detail" className="mt-8 scroll-mt-20">
+                {/* 客户需求：卡头内嵌「项目」下拉（与下方共用同一份选择）；未选项目 → 空态 */}
+                <AnalysisSection
+                  title="客户需求"
+                  icon={<LineChart className="h-4 w-4 text-muted-foreground" />}
+                  subtitle={hasProjectSelected ? demandScopeSubtitle : undefined}
+                  actions={
                     <MultiSelectDropdown
                       label="项目"
                       icon={<FolderKanban className="h-3.5 w-3.5 text-muted-foreground" />}
@@ -258,112 +286,114 @@ export default function SupplyDemandPage() {
                       onChange={setSelectedProjectIds}
                       placeholder="选择项目"
                       searchPlaceholder="搜索项目代码或名称…"
-                      hint={hasProjectSelected ? undefined : "选择项目后，下方才会出内容"}
                     />
-                    <MultiSelectDropdown
-                      label="物料"
-                      icon={<Package className="h-3.5 w-3.5 text-muted-foreground" />}
-                      options={allMaterials.map((m) => ({
-                        value: m.pn,
-                        label: m.name,
-                        sublabel: m.pn,
-                        color: riskyByPn.get(m.pn) ? RISK_DOT : SAFE_DOT,
-                      }))}
-                      selected={selectedMaterials}
-                      onChange={setSelectedMaterials}
-                      disabled={!hasProjectSelected || allMaterials.length === 0}
-                      placeholder={hasProjectSelected ? "选择物料" : "请先选择项目"}
-                      searchPlaceholder="搜索物料 PN 或名称…"
-                      hint={
-                        !hasProjectSelected
-                          ? undefined
-                          : hasMaterialSelected
-                            ? undefined
-                            : "选择物料后，物料供需图与热力图才会出内容"
-                      }
-                    />
-                  </CardContent>
-                </Card>
-
-                {/* 客户需求：始终呈现（未选项目时给全部项目） */}
-                <AnalysisSection
-                  title="客户需求"
-                  icon={<LineChart className="h-4 w-4 text-muted-foreground" />}
-                  subtitle={
-                    hasProjectSelected ? `${selectedProjectIds.size} 个项目` : `全部 ${projects.length} 个项目`
                   }
                 >
-                  <DemandContent
-                    data={demandRelations}
-                    selectedIds={demandProjectIds}
-                    loading={demandLoading}
-                  />
+                  {!hasProjectSelected ? (
+                    <EmptyState
+                      size="md"
+                      icon={<LineChart className="h-7 w-7" />}
+                      title="请先选择项目"
+                      description="在右上角「项目」下拉里选好项目，各项目的客户需求走势会显示在这里"
+                    />
+                  ) : (
+                    <DemandContent
+                      data={detailRelations}
+                      selectedIds={selectedProjectIds}
+                      loading={loadingRelations}
+                    />
+                  )}
                 </AnalysisSection>
 
-                {!hasProjectSelected ? (
-                  <AnalysisSection
-                    title="物料供需分析"
-                    icon={<Sliders className="h-4 w-4 text-muted-foreground" />}
-                  >
+                {/* 物料供需分析：卡头内嵌「项目 + 物料」双下拉 */}
+                <AnalysisSection
+                  title="物料供需分析"
+                  icon={<Sliders className="h-4 w-4 text-muted-foreground" />}
+                  subtitle={
+                    hasMaterialSelected ? `${materialAggregates.length} 个物料有数据` : undefined
+                  }
+                  actions={
+                    <>
+                      <MultiSelectDropdown
+                        label="项目"
+                        icon={<FolderKanban className="h-3.5 w-3.5 text-muted-foreground" />}
+                        options={projects.map((p) => ({
+                          value: String(p.id),
+                          label: `${p.code} · ${p.name}`,
+                        }))}
+                        selected={selectedProjectIds}
+                        onChange={setSelectedProjectIds}
+                        placeholder="选择项目"
+                        searchPlaceholder="搜索项目代码或名称…"
+                      />
+                      <MultiSelectDropdown
+                        label="物料"
+                        icon={<Package className="h-3.5 w-3.5 text-muted-foreground" />}
+                        options={allMaterials.map((m) => ({
+                          value: m.pn,
+                          label: m.name,
+                          sublabel: m.pn,
+                          color: riskyByPn.get(m.pn) ? RISK_DOT : SAFE_DOT,
+                        }))}
+                        selected={selectedMaterials}
+                        onChange={setSelectedMaterials}
+                        disabled={!hasProjectSelected || allMaterials.length === 0}
+                        placeholder={hasProjectSelected ? "选择物料" : "请先选择项目"}
+                        searchPlaceholder="搜索物料 PN 或名称…"
+                      />
+                    </>
+                  }
+                >
+                  {!hasProjectSelected ? (
                     <EmptyState
                       size="md"
                       icon={<PackageOpen className="h-7 w-7" />}
                       title="请先选择项目与物料"
-                      description="在上方下拉里选好项目与物料，物料供需组合图与供应系数热力图会显示在这里"
+                      description="在右上角选好项目与物料，物料供需组合图与供应系数热力图会显示在这里"
                     />
-                  </AnalysisSection>
-                ) : (
-                  <AnalysisSection
-                    title="物料供需分析"
-                    icon={<Sliders className="h-4 w-4 text-muted-foreground" />}
-                    subtitle={
-                      hasMaterialSelected ? `${materialAggregates.length} 个物料有数据` : undefined
-                    }
-                  >
-                    {loadingRelations ? (
-                      <Skeleton className="h-[260px] w-full" />
-                    ) : noMaterialRelation ? (
-                      <EmptyState
-                        size="md"
-                        icon={<PackageOpen className="h-7 w-7" />}
-                        title="暂无物料关系"
-                        description="所选项目还没有挂载物料-供应商关系，请到「供应商列表」挂载后再来查看"
+                  ) : loadingRelations ? (
+                    <Skeleton className="h-[260px] w-full" />
+                  ) : noMaterialRelation ? (
+                    <EmptyState
+                      size="md"
+                      icon={<PackageOpen className="h-7 w-7" />}
+                      title="暂无物料关系"
+                      description="所选项目还没有挂载物料-供应商关系，请到「供应商列表」挂载后再来查看"
+                    />
+                  ) : !hasMaterialSelected ? (
+                    <EmptyState
+                      size="md"
+                      icon={<PackageOpen className="h-7 w-7" />}
+                      title="请先选择物料"
+                      description="在右上角「物料」下拉里勾选要看哪些物料，这里才会出组合图与供应系数热力图"
+                    />
+                  ) : noSupplyData ? (
+                    <EmptyState
+                      size="md"
+                      icon={<PackageOpen className="h-7 w-7" />}
+                      title="暂无物料供需数据"
+                      description="所选物料尚未录入客户需求或供应商产能；到项目详情页补录后再回来查看"
+                    />
+                  ) : (
+                    <>
+                      <MaterialSupplyCharts
+                        demand={materialAggregates.map((m) => ({
+                          pn: m.pn,
+                          name: m.name,
+                          demandSeries: m.demandSeries,
+                          color: m.color,
+                        }))}
+                        capacity={supplierAggregates.map((s) => ({
+                          code: s.code,
+                          name: s.name,
+                          capacitySeries: s.capacitySeries,
+                          color: s.color,
+                        }))}
                       />
-                    ) : !hasMaterialSelected ? (
-                      <EmptyState
-                        size="md"
-                        icon={<PackageOpen className="h-7 w-7" />}
-                        title="请先选择物料"
-                        description="在上方「物料」下拉里勾选要看哪些物料，这里才会出组合图与供应系数热力图"
-                      />
-                    ) : noSupplyData ? (
-                      <EmptyState
-                        size="md"
-                        icon={<PackageOpen className="h-7 w-7" />}
-                        title="暂无物料供需数据"
-                        description="所选物料尚未录入客户需求或供应商产能；到项目详情页补录后再回来查看"
-                      />
-                    ) : (
-                      <>
-                        <MaterialSupplyCharts
-                          demand={materialAggregates.map((m) => ({
-                            pn: m.pn,
-                            name: m.name,
-                            demandSeries: m.demandSeries,
-                            color: m.color,
-                          }))}
-                          capacity={supplierAggregates.map((s) => ({
-                            code: s.code,
-                            name: s.name,
-                            capacitySeries: s.capacitySeries,
-                            color: s.color,
-                          }))}
-                        />
-                        <SupplyCoefHeatmap className="mt-4" materials={chartMaterials} />
-                      </>
-                    )}
-                  </AnalysisSection>
-                )}
+                      <SupplyCoefHeatmap className="mt-4" materials={chartMaterials} />
+                    </>
+                  )}
+                </AnalysisSection>
               </div>
             )}
 
@@ -615,21 +645,26 @@ function AnalysisSection({
   title,
   icon,
   subtitle,
+  actions,
   children,
 }: {
   title: string;
   icon: React.ReactNode;
   subtitle?: string;
+  /** 卡头右侧内嵌的筛选器（如下拉）。⚠️ 下拉面板是 absolute + top-full 向下展开，
+   *  所以本卡必须是 `overflow-visible`（见上方注释 / AGENT.md 坑 22）。 */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <Card className="mt-3 overflow-hidden">
-      <div className="flex items-center gap-2.5 border-b px-5 py-3.5">
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-medium">
+    <Card className="mt-3 overflow-visible">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b px-5 py-3.5">
+        <span className="flex items-center gap-1.5 text-sm font-medium">
           {icon}
           {title}
         </span>
-        {subtitle && <span className="shrink-0 text-xs text-muted-foreground">{subtitle}</span>}
+        {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
+        {actions && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
       <CardContent className="p-5">{children}</CardContent>
     </Card>
@@ -681,7 +716,21 @@ function DemandContent({
 /*  项目卡片                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function ProjectCard({ project, onClick }: { project: Project; onClick: () => void }) {
+/**
+ * 项目卡片。
+ *
+ * 落点 ①（方案 §6.4）：在已有的「状态徽标 + 负责人」那一行**行尾**追加一个版本 chip ——
+ * 不新增行、不改卡片结构。首页只需要回答一个问题：「哪个项目的需求刚变过、变了多少」。
+ */
+function ProjectCard({
+  project,
+  version,
+  onClick,
+}: {
+  project: Project;
+  version?: ProjectDemandVersionSummary;
+  onClick: () => void;
+}) {
   // 只查 1 次：物料数 / 明细行 / 供应商数 都能从该项目的供应明细推出
   const { data: relations = [], isLoading: relationsLoading } = useProjectRelations(project.id);
   const statusMeta = STATUS_META[project.status] ?? STATUS_META.active;
@@ -711,11 +760,14 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
       </div>
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <Badge variant="secondary" className={statusMeta.chip}>
           {statusMeta.label}
         </Badge>
         {project.owner && <span className="text-xs text-muted-foreground">负责人：{project.owner}</span>}
+        <span className="ml-auto">
+          <ProjectVersionChip version={version} />
+        </span>
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-2">
@@ -724,6 +776,38 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         <Stat icon={<CalendarRange className="h-3.5 w-3.5" />} label="供应商" value={relationsLoading ? "—" : String(supplierCount)} />
       </div>
     </Card>
+  );
+}
+
+/** 需求版本 chip（落点 ①）：只给「当前版 + 相对上一版的变化」，不占整行 */
+function ProjectVersionChip({ version }: { version?: ProjectDemandVersionSummary }) {
+  if (!version || !version.current_version_no) {
+    return (
+      <span className="rounded border border-dashed px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        需求未录入
+      </span>
+    );
+  }
+  const { delta, delta_pct: deltaPct } = version;
+  const tone =
+    delta == null || delta === 0
+      ? "text-muted-foreground"
+      : delta > 0
+        ? "text-red-600 dark:text-red-400"
+        : "text-green-600 dark:text-green-400";
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded bg-primary/5 px-1.5 py-0.5 text-[10px] text-primary"
+      title={version.current_label ?? undefined}
+    >
+      <span className="font-medium tabular-nums">V{version.current_version_no}</span>
+      {deltaPct != null && (
+        <span className={`tabular-nums ${tone}`}>
+          {deltaPct > 0 ? "+" : ""}
+          {deltaPct.toFixed(1)}%
+        </span>
+      )}
+    </span>
   );
 }
 
