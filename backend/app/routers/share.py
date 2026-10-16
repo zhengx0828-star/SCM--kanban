@@ -84,6 +84,20 @@ def _validate_qdc(q: Optional[float], d: Optional[float], c: Optional[float]) ->
     return errors
 
 
+def _is_decimal_scale(values: list) -> bool:
+    """一组份额值是否「整体按 0-1 小数口径」填写（如 0.71 表示 71%）。
+
+    判据：存在非零值，且所有非零值都 ≤1（0 在两种口径下含义相同，忽略）。
+    用途：客户 ERP 导出的份额/基地配额常写成 0.71 这种比例值，需要统一 ×100
+    后再参与计算与展示，否则会出现「算的是 0.71%、看的是 0.71%」但用户本意是 71% 的静默错。
+    混用（既有 ≤1 又有 >1）返回 False，由调用方报错拦掉。
+    """
+    nonzero = [float(v) for v in values if v is not None and float(v) != 0]
+    if not nonzero:
+        return False
+    return all(0 < v <= 1 for v in nonzero)
+
+
 def _mixed_share_scale(bases: list[dict]) -> bool:
     """该记录的基地份额是否「小数与百分数混用」。
 
@@ -106,7 +120,7 @@ def _bases_scale_error(where: str) -> HTTPException:
     """口径混用的统一错误（422 + 中文原因）。"""
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail=f"{where}基地份额口径混用：请统一填 0-100 的百分数（50 表示 50%），不要同时出现 0.5 这类小数",
+        detail=f"{where}基地份额口径混用：请统一口径，不要既有 0.5 这类 0-1 小数、又有 50 这类 0-100 百分数",
     )
 
 
@@ -666,8 +680,17 @@ def update_share_record(record_id: int, payload: ShareRecordUpdate, db: Session 
     manual_override = payload.share_current is not None
     bases_changed = payload.bases is not None
 
-    if payload.bases is not None and _mixed_share_scale([b.model_dump() for b in payload.bases]):
-        raise _bases_scale_error(f"份额记录 {record_id} ")
+    bases_payload: Optional[list[dict]] = None
+    if payload.bases is not None:
+        bases_payload = [b.model_dump() for b in payload.bases]
+        if _mixed_share_scale(bases_payload):
+            raise _bases_scale_error(f"份额记录 {record_id} ")
+        # 与 Excel 导入保持一致：整条记录全 ≤1 的小数 → ×100 入库，
+        # 避免出现「参与计算的份额是 50%、页面显示 0.5%」的口径割裂
+        if _is_decimal_scale([b.get("share") for b in bases_payload]):
+            for b in bases_payload:
+                if b.get("share") is not None:
+                    b["share"] = round(b["share"] * 100, 2)
 
     if payload.share_current is not None:
         record.share_current = payload.share_current
@@ -677,8 +700,8 @@ def update_share_record(record_id: int, payload: ShareRecordUpdate, db: Session 
         record.d_score = payload.d_score
     if payload.c_score is not None:
         record.c_score = payload.c_score
-    if bases_changed:
-        record.bases = json.dumps([b.model_dump() for b in payload.bases], ensure_ascii=False)
+    if bases_changed and bases_payload is not None:
+        record.bases = json.dumps(bases_payload, ensure_ascii=False)
     if payload.remark is not None:
         record.remark = payload.remark
 
@@ -741,9 +764,11 @@ async def import_share_records(
     规则：
     - 按 (pn, supplier_code) 定位供应关系，不存在则报错跳过
     - 校验：份额 ∈ [0,100]、QDC 五档、同项目同物料份额和 ≈ 100%（容差 ±1%）
+    - 份额口径兼容：0-100 百分数（71）与 0-1 小数（0.71）都收；整批全部 ≤1 时
+      按小数口径 ×100 归一；两种口径混填则报错（避免静默错 100 倍）
     - 基地列按成对解析：「基地X_份额」+「基地X_线数」两列合并为一条 base；
-      仅有份额无线数 → 跳过该基地；仅无线数有份额 → 报错误行；
-      基地名去重；空值忽略
+      表头兼容「基地A份额 / 基地A条数」等（下划线可省，「线数 / 条数 / 拉线数」等价）；
+      仅有份额无线数 → 报错误行；仅无线数有份额 → 报错误行；基地名去重；空值忽略
     - 「本月份额」可留空：有基地数据时按 Σ(份额 × 拉线) ÷ Σ拉线 自动算
     - 手动修改过的记录（edited_manually=true）不覆盖，跳过
     """
@@ -792,10 +817,13 @@ async def import_share_records(
     idx_d = col_idx("D")
     idx_c = col_idx("C")
 
-    # 基地列：表头形如「基地X_份额」「基地X_线数」，成对解析
+    # 基地列：表头形如「基地X_份额」「基地X_线数」，成对解析。
+    # 兼容写法：下划线可有可无，「线数 / 条数 / 拉线数」等价 —— 客户手上的 ERP 导出
+    # 常写「基地A份额 / 基地A条数」，以前识别不了会被静默丢弃。
     known_idx = {i for i in (idx_pn, idx_scode, idx_share, idx_q, idx_d, idx_c) if i is not None}
     base_cols: dict[str, dict[str, int]] = {}  # base_name -> {"share": col, "lines": col}
-    base_pat = re.compile(r"^([^_]+)_(份额|线数)$")
+    base_pat = re.compile(r"^(?P<name>.+?)_?(?P<kind>份额|拉线数|线数|条数)$")
+    base_kind_map = {"份额": "share", "线数": "lines", "条数": "lines", "拉线数": "lines"}
     for i, h in enumerate(header):
         if i in known_idx:
             continue
@@ -803,12 +831,13 @@ async def import_share_records(
         m = base_pat.match(hs)
         if not m:
             continue
-        bname, kind = m.group(1).strip(), m.group(2)
-        if not bname:
+        bname = (m.group("name") or "").strip()
+        # 排除「本月系统份额」这类总列（kind 也是「份额」）被误当成基地
+        if not bname or bname.startswith(("本月", "系统", "总", "合计")):
             continue
-        # ⚠️ kind 是正则捕获的中文「份额 / 线数」，必须归一成英文键再存，
+        # ⚠️ kind 是正则捕获的中文词，必须归一成英文键再存，
         # 否则下面取值时用 cols["share"] / cols["lines"] 永远取不到 → 基地整列被静默丢弃。
-        base_cols.setdefault(bname, {})["share" if kind == "份额" else "lines"] = i
+        base_cols.setdefault(bname, {})[base_kind_map[m.group("kind")]] = i
 
     result = ShareImportResult()
     prev_month = _prev_month(month)
@@ -897,14 +926,35 @@ async def import_share_records(
         if bases_data and _mixed_share_scale(bases_data):
             result.errors.append(
                 f"第 {row_num} 行: 基地份额口径混用（同一行既有 ≤1 的小数又有 >1 的百分数），"
-                "请统一填 0-100 的百分数"
+                "请统一口径（0-1 小数 或 0-100 百分数，不要混）"
             )
             continue
+        # 基地份额口径归一：整条记录全 ≤1 的小数 → ×100 后入库，
+        # 保证「参与计算的 %」与「前端显示的 %」一致（否则会出现算的是 50%、页面显示 0.5%）
+        if _is_decimal_scale([b.get("share") for b in bases_data]):
+            for b in bases_data:
+                if b.get("share") is not None:
+                    b["share"] = round(b["share"] * 100, 2)
         rows.append((
             {"share_current": share, "q_score": q, "d_score": d, "c_score": c,
              "bases": bases_data if bases_data else None},
             key,
         ))
+
+    # 「本月份额」口径归一：整批非零份额全部 ≤1 → 视为 0-1 小数口径 ×100。
+    # 客户 ERP 导出的份额常是 0.71 这种比例值（= 71%）；不归一会被当成 0.71% 而报「份额和 ≠ 100%」。
+    # 部分行小数、部分行百分数 → 口径无法判断，直接拒绝（避免静默错 100 倍）。
+    shares_in_file = [d["share_current"] for d, _ in rows if d["share_current"] not in (None, 0)]
+    if shares_in_file:
+        if _is_decimal_scale(shares_in_file):
+            for data, _ in rows:
+                if data["share_current"] is not None:
+                    data["share_current"] = round(data["share_current"] * 100, 2)
+        elif any(0 < v <= 1 for v in shares_in_file) and any(v > 1 for v in shares_in_file):
+            result.errors.append(
+                "份额列口径混用：文件中既有 ≤1 的小数（如 0.71）又有 >1 的百分数（如 71），"
+                "请统一口径（0-1 小数 或 0-100 百分数）"
+            )
 
     # 仅录基地数据（本月份额留空）→ 先按各基地 (share × lines) 公式自动算份额
     for data, _ in rows:
