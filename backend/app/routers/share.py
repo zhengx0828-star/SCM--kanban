@@ -806,7 +806,9 @@ async def import_share_records(
         bname, kind = m.group(1).strip(), m.group(2)
         if not bname:
             continue
-        base_cols.setdefault(bname, {})[kind] = i
+        # ⚠️ kind 是正则捕获的中文「份额 / 线数」，必须归一成英文键再存，
+        # 否则下面取值时用 cols["share"] / cols["lines"] 永远取不到 → 基地整列被静默丢弃。
+        base_cols.setdefault(bname, {})["share" if kind == "份额" else "lines"] = i
 
     result = ShareImportResult()
     prev_month = _prev_month(month)
@@ -924,6 +926,7 @@ async def import_share_records(
         # 有错误则不写入任何行（原子性）
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="；".join(result.errors[:20]))
 
+    touched_materials: set[int] = set()
     for data, key in rows:
         existing = existing_records.get(key)
         if existing is not None and existing.edited_manually:
@@ -931,6 +934,7 @@ async def import_share_records(
             continue
         rel = relation_map[key]
         prev = prev_records.get(key)
+        touched_materials.add(rel.material_id)
         if existing is not None:
             # 更新（不覆盖手改值；基地配额列有值时同步覆盖基地快照）
             existing.share_current = data["share_current"] if data["share_current"] is not None else existing.share_current
@@ -940,7 +944,6 @@ async def import_share_records(
             if data["bases"]:
                 existing.bases = json.dumps(data["bases"], ensure_ascii=False)
             result.updated += 1
-            _recompute_project_material(db, project_id, rel.material_id, month)
         else:
             record = ShareRecord(
                 project_id=project_id,
@@ -956,7 +959,14 @@ async def import_share_records(
             )
             db.add(record)
             result.imported += 1
-            _recompute_project_material(db, project_id, rel.material_id, month)
+
+    # 统一重算：新增的记录此刻还是 pending 对象，而 Session 是 autoflush=False，
+    # 必须先 flush，_recompute_project_material 的 SELECT 才能看到它们；
+    # 否则新增行不会写加权分 / 建议配额（表现为导入首月这些字段全 NULL，要再导一次才补算）。
+    if touched_materials:
+        db.flush()
+        for material_id in sorted(touched_materials):
+            _recompute_project_material(db, project_id, material_id, month)
 
     db.commit()
     return result
