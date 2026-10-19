@@ -18,7 +18,7 @@
  *   Windows 下 Chrome 有最小窗口宽度（请求 390 实际得到 497），窄屏验证会**假通过**。
  *
  * 用法：node scripts/verify_mobile.mjs [baseUrl]
- *   默认 http://127.0.0.1:5173
+ *   默认 http://127.0.0.1
  */
 
 import { spawn } from "node:child_process";
@@ -26,7 +26,7 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const BASE = process.argv[2] ?? "http://127.0.0.1:5173";
+const BASE = process.argv[2] ?? "http://127.0.0.1";
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const PORT = 9300 + Math.floor(Math.random() * 400);
 const profile = path.join(os.tmpdir(), `cdp-mobverify-${Date.now()}`);

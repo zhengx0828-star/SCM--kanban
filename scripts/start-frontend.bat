@@ -1,7 +1,7 @@
 @echo off
 rem ============================================
 rem  SCM 供应链看板 - 前端启动器
-rem  Vite 开发服务于 http://localhost:5173
+rem  Vite 开发服务于 http://localhost
 rem ============================================
 setlocal
 cd /d "%~dp0..\frontend"
@@ -22,11 +22,11 @@ if defined NODE_DIR (
 )
 
 rem ===== 端口占用检查 =====
-netstat -ano | findstr ":5173" | findstr "LISTENING" >nul
+netstat -ano | findstr /C:":80 " | findstr "LISTENING" >nul
 if not errorlevel 1 (
     echo.
-    echo 端口 5173 已被占用，前端可能已在运行，无需重复启动。
-    echo 直接访问 http://localhost:5173 即可。
+    echo 端口 80 已被占用，前端可能已在运行，无需重复启动。
+    echo 直接访问 http://localhost 即可。
     goto :eof
 )
 
@@ -36,8 +36,8 @@ if not exist "node_modules\vite" (
     call npm install || goto :error
 )
 
-echo [2/2] 启动 Vite 服务于 http://localhost:5173 ...
-"%NODE_DIR%\node.exe" node_modules\vite\bin\vite.js --host 127.0.0.1 --port 5173
+echo [2/2] 启动 Vite 服务于 http://localhost ...
+"%NODE_DIR%\node.exe" node_modules\vite\bin\vite.js --host 127.0.0.1 --port 80
 goto :eof
 
 :error

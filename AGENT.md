@@ -42,7 +42,7 @@
 | pnpm | `runtime\node\pnpm.cmd`（11.24.0） |
 | 前端依赖 | `frontend\node_modules\`（已装） |
 | 数据库 | `backend\products.db`（业务数据，**不进 git**） |
-| 端口 | 后端 8000 / 前端 5173 |
+| 端口 | 后端 8000 / 前端 **80**（浏览器访问 `http://localhost`，不带端口号）。`vite.config.ts` 已开 `strictPort: true` —— 80 被占时**直接报错退出**，不会静默跳 81（2026-10-19 改） |
 | Git | `master` 分支，`origin` = `https://github.com/zhengx0828-star/SCM--kanban.git`（凭证已就位，可直接 `git push`）｜**git 只在 WorkBuddy 自带 PortableGit 中、未加系统 PATH**（2026-10-14 核实） |
 
 **功能模块**：Dashboard、供需管理（含**客户需求版本化**）、份额管理、库存管理（信号塔）、主数据（供应商/物料/供应关系/项目）、规则手册。API 全量清单见 `README.md`「十一、API 概览」。
@@ -73,7 +73,7 @@ scripts\start-frontend.bat
 curl.exe -s http://127.0.0.1:8000/api/health
 
 # 前端（预期输出 HTTP 状态码 200）
-curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:5173
+curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1
 
 # 后端冒烟测试（在 backend 目录）
 cd backend
@@ -796,7 +796,7 @@ const maxCapacity = Math.max(0, ...stackedCapacity);   // → 83,000 → yAxis.m
 | 5. 前端依赖 | `Test-Path frontend\node_modules\react` | `True` |
 | 6. 数据库 | `Test-Path backend\products.db` | `True`（无则自动建空表，不影响启动） |
 | 7. 后端端口 | `curl.exe -s http://127.0.0.1:8000/api/health` | `{"status":"ok",...}` |
-| 8. 前端端口 | `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:5173` | `200` |
+| 8. 前端端口 | `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1` | `200` |
 | 9. 启动脚本编码 | 见「六、坑 7」的编码检查命令 | 三个 `.bat` 均 `GBK-OK` / `非UTF-8-OK` / `裸LF=0` |
 | 10. 手动绕过脚本 | `cd backend` 后 `& '..\runtime\python\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000` | 能起则问题在脚本，不在项目 |
 

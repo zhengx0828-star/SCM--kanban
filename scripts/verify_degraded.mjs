@@ -20,7 +20,7 @@
  *     写成 `/api/changes/*` 会漏掉 `/api/changes?page=1`（没有结尾斜杠）。
  *
  * 用法：node scripts/verify_degraded.mjs [baseUrl]
- *   默认 http://127.0.0.1:5173
+ *   默认 http://127.0.0.1
  */
 
 import { spawn } from "node:child_process";
@@ -28,7 +28,7 @@ import { rmSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const BASE = process.argv[2] ?? "http://127.0.0.1:5173";
+const BASE = process.argv[2] ?? "http://127.0.0.1";
 /** 设了就按场景存整页截图（复核用；手机上只能看截图，不能读控制台） */
 const SHOT_DIR = process.env.SHOT_DIR ?? "";
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";

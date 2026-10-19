@@ -39,7 +39,7 @@ import path from "node:path";
 import os from "node:os";
 
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
-const BASE = process.argv[2] ?? "http://127.0.0.1:5173";
+const BASE = process.argv[2] ?? "http://127.0.0.1";
 const API = "http://127.0.0.1:8000";
 const SHOT_DIR = process.env.SHOT_DIR ?? "";
 const PORT = 9620 + Math.floor(Math.random() * 200);

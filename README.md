@@ -75,7 +75,7 @@
 | --- | --- | --- |
 | `start-all.bat` / `start-all.sh` | 一键启动前后端 | 全相对路径，runtime 优先，依赖已装则跳过安装 |
 | `scripts\start-backend.bat/.sh` | 只启动后端 (8000) | 同上 |
-| `scripts\start-frontend.bat/.sh` | 只启动前端 (5173) | 同上 |
+| `scripts\start-frontend.bat/.sh` | 只启动前端 (80) | 同上 |
 
 ### 3.3 版本锁定（不要擅自升级）
 
@@ -227,13 +227,13 @@ cd frontend
 
 | 地址 | 说明 |
 | --- | --- |
-| http://localhost:5173 | 前端页面 |
+| http://localhost | 前端页面 |
 | http://localhost:8000/docs | Swagger API 文档 |
 | http://localhost:8000/api/health | 健康检查 |
 
 ### 6.5 迁移后验证（跑 Demo 检查单）
 
-1. 浏览器打开 `http://localhost:5173`，页面正常渲染、无报错。
+1. 浏览器打开 `http://localhost`，页面正常渲染、无报错。
 2. 打开 `http://localhost:8000/docs`，Swagger 可正常加载。
 3. 访问 `http://localhost:8000/api/health`，返回 `{"status":"ok",...}`。
 4. （可选）跑后端冒烟测试：
@@ -623,7 +623,7 @@ scm-kanban/
 | --- | --- |
 | 启动脚本双击后刷一屏「不是内部或外部命令」 | ★ `.bat` 编码被破坏（存成 UTF-8 而非 GBK）。修复流程见 `AGENT.md`「六、坑 7」：用 Python 把三个 `.bat` 转 GBK + CRLF，**不要用编辑器直接另存** |
 | 启动脚本报「未找到 npm/pnpm」 | 将 `runtime\node` 放回项目目录后重试；或安装 Node.js LTS 并加入 PATH |
-| 端口 8000 / 5173 被占用 | 一键脚本会自动检测并跳过已占用服务；手动启动时换端口需同步改 vite 代理 |
+| 端口 8000 / 80 被占用 | 一键脚本会检测并跳过已在运行的服务；**前端 80 若被别的程序（IIS / WSService / http.sys）占用，Vite 因 `strictPort` 直接报错退出**（不会偷偷换 81），先释放 80 再启动；手动换端口要同步改 `frontend/vite.config.ts` 的 `server.port` 与 `proxy.target` |
 | 前端请求 `/api` 失败 | 确认后端已启动；前端通过 Vite 代理访问后端，无需额外配 CORS |
 | 后端报 `No module named 'fastapi'` | `runtime\python\Lib\site-packages` 缺失，用 8.2 重建 runtime 并安装依赖 |
 | 数据库想重置 | 删除 `backend/products.db` 后重启，自动重建空表 |

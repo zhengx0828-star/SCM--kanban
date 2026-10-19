@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================
 #  Product Manager - Frontend Launcher
-#  Starts Vite dev server on http://localhost:5173
+#  Starts Vite dev server on http://localhost
 #  运行时：项目内置 runtime/node（全相对路径，可整体搬移），pnpm 优先
 # ============================================
 set -e
@@ -30,7 +30,7 @@ if [ ! -d "node_modules" ]; then
   ${PKGMGR} install
 fi
 
-echo "[2/2] 启动 Vite 开发服务 http://localhost:5173 ..."
+echo "[2/2] 启动 Vite 开发服务 http://localhost ..."
 if [ "${PKGMGR}" = "pnpm" ]; then
   ${PKGMGR} run dev --host 127.0.0.1
 else

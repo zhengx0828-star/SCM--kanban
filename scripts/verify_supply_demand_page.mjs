@@ -18,7 +18,7 @@
  *
  * 用法（需前端已启动）：
  *   node scripts/verify_supply_demand_page.mjs [url] [截图输出目录]
- *   默认 url = http://127.0.0.1:5173/supply-demand
+ *   默认 url = http://127.0.0.1/supply-demand
  */
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -26,7 +26,7 @@ import path from "node:path";
 import os from "node:os";
 
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
-const URL = process.argv[2] || "http://127.0.0.1:5173/supply-demand";
+const URL = process.argv[2] || "http://127.0.0.1/supply-demand";
 const OUT = process.argv[3] || path.join(os.tmpdir(), `sd-verify-${Date.now()}`);
 mkdirSync(OUT, { recursive: true });
 

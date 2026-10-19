@@ -55,6 +55,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        # 前端已迁到 80（http://localhost 不带端口），保留默认端口写法
+        "http://localhost",
+        "http://127.0.0.1",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",

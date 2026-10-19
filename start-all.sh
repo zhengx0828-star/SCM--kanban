@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================
 #  Product Manager - One-Click Launcher
-#  Starts backend (8000) + frontend (5173) together.
+#  Starts backend (8000) + frontend (80) together.
 #
 #  Runtime strategy (★ ALL RELATIVE PATHS, project is fully relocatable):
 #    Python : runtime/python (linux/mac: bin/python3, win: python.exe)  -> preferred
@@ -17,7 +17,7 @@ ROOT="$(pwd)"
 
 echo "=========================================="
 echo "  产品管理系统 - 一键启动器"
-echo "  前端页面: http://localhost:5173"
+echo "  前端页面: http://localhost"
 echo "  API 文档: http://localhost:8000/docs"
 echo "=========================================="
 echo
@@ -85,7 +85,7 @@ echo "[3/3] 启动后端服务 http://127.0.0.1:8000 ..."
 BACK_PID=$!
 
 # --- [4/4] start frontend ---
-echo "[4/4] 启动前端服务 http://localhost:5173 ..."
+echo "[4/4] 启动前端服务 http://localhost ..."
 if [ "${PKGMGR}" = "pnpm" ]; then
   (cd frontend && ${PKGMGR} run dev --host 127.0.0.1) &
 else
@@ -97,7 +97,7 @@ trap 'echo; echo "正在停止服务..."; kill $BACK_PID $FRONT_PID 2>/dev/null'
 
 echo
 echo "两个服务均已启动，按 Ctrl+C 可同时停止。"
-echo "前端页面: http://localhost:5173"
+echo "前端页面: http://localhost"
 echo "API 文档: http://localhost:8000/docs"
 echo
 wait
