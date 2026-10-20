@@ -8,25 +8,38 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChinaMap } from "@/components/charts/ChinaMap";
+import { ProjectRiskMatrix } from "@/components/dashboard/ProjectRiskMatrix";
 import { SiteHeader } from "@/components/site/SiteHeader";
 import { SiteSidebar } from "@/components/site/SiteSidebar";
 import { SupplierFormDialog } from "@/components/suppliers/SupplierFormDialog";
 import { SupplierDetailDialog } from "@/components/suppliers/SupplierDetailDialog";
-import { useMaterials } from "@/hooks/use-materials";
-import { useInventoryProjectOverview } from "@/hooks/use-inventory";
+import { useAlerts } from "@/hooks/use-alerts";
 import { useChangeSummary } from "@/hooks/use-changes";
-import { useProjectSuppliers, useProjects } from "@/hooks/use-projects";
-import { useSuppliers } from "@/hooks/use-suppliers";
+import { useInventoryProjectOverview } from "@/hooks/use-inventory";
+import { useMaterials } from "@/hooks/use-materials";
+import { useProjects, useProjectSuppliers } from "@/hooks/use-projects";
 import { useShareDashboardStats } from "@/hooks/use-share";
+import { useSuppliers } from "@/hooks/use-suppliers";
 import { cn } from "@/lib/utils";
 import { RISK_META, RISK_ORDER, riskKeyOf, type Supplier, type SupplierRiskKey } from "@/types/supplier";
 import type { ChangeSummary } from "@/types/change";
 
 /**
- * Dashboard 看板页：总结性概览。
- * 顶部统计卡 → 整幅全国供应商分布地图（可缩放拖拽，红黄蓝按风险等级着色，灰=未评估）。
- * 地图带「项目切片器」：选中项目后只显示该项目下的供应商点位（数据与供应商列表联动）。
- * 「项目/物料总数」与「供应商列表」页联动：项目数 = 项目 Tab 数量；物料数 = 物料 Tab 数量（按唯一 PN 计）。
+ * Dashboard 看板页 —— **本页即预警中心**（2026-10-20 用户拍板：不单独开 /alerts 页面）。
+ *
+ * 结构（自上而下）：
+ *   ① 顶部 5 张卡：项目/物料总数 · 份额波动物料 · 重点物料独供数量 · 库存天数<3 · 变更进行中
+ *      ★ 这五张卡的口径与文案**保持原样**，用户明确要求不要动（2026-10-20 恢复过一次）。
+ *        数据各自与所属板块同源（share-stats / project-overview / changes-summary），
+ *        所以点进去后列表行数 == 卡上数字。
+ *   ② 项目风险热点矩阵：哪个项目哪个维度最脏，**点格直接进板块**（唯一详情入口）
+ *   ③ 供应商分布地图（原位置下移，与风险无关）
+ *
+ * ★ 2026-10-20 用户连删两块：先是「预警明细」清单，再是「紧急」置顶条。
+ *   首页正文不再有清单或摘要条。矩阵「紧急」列是唯一的具体信息，矩阵格是唯一的详情入口。
+ *
+ * ★ 卡片之所以不复用 /api/alerts 的计数：那套是「风险条数」，与卡片原本的
+ *   「物料数 / 推算单元数 / 变更单数」不是同一口径。硬套会改掉卡片的含义。
  */
 
 /** 切片器默认值：查看全部供应商 */
@@ -44,6 +57,11 @@ interface StatItem {
   hintTone?: "danger" | "warn";
   onClick?: () => void;
 }
+
+const TONE_CLASS = {
+  danger: "font-medium text-red-600 dark:text-red-400",
+  warn: "font-medium text-amber-600 dark:text-amber-400",
+} as const;
 
 /**
  * 库存预警统计卡（数值来自实时接口，无演示数据）：
@@ -64,7 +82,7 @@ function buildUrgentInventoryStat(
   return {
     label: "库存天数 < 3",
     value: urgentUnits.toLocaleString(),
-    hint: "已断货 / 紧急，需立即补货 · 点击查看明细",
+    hint: "已断货 / 紧急，需立即补货",
     icon: Timer,
     chip: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
     bar: "bg-amber-500",
@@ -91,7 +109,7 @@ function buildChangesStat(summary: ChangeSummary | undefined, goChanges: () => v
   return {
     label: "变更进行中",
     value: active.toLocaleString(),
-    hint: empty ? "暂无变更" : `超期 ${overdue} · 临期 ${near} · 点击查看`,
+    hint: empty ? "暂无变更" : `超期 ${overdue} · 临期 ${near}`,
     hintTone: overdue > 0 ? "danger" : near > 0 ? "warn" : undefined,
     icon: GitPullRequestArrow,
     chip: "bg-primary/10 text-primary",
@@ -107,15 +125,17 @@ export default function DashboardPage() {
   // 项目总数 = 项目列表 total；物料总数 = 物料列表 total（物料表 PN 唯一，即不同 PN 的种数）
   const { data: projectList, isLoading: projectLoading } = useProjects({ page: 1, page_size: 1 });
   const { data: materialList, isLoading: materialLoading } = useMaterials({ page: 1, page_size: 1 });
-  // Dashboard 联动：份额波动 / 重点物料独供（跨项目、最新月，与份额管理同源）
+  // 卡片 2/3：份额波动 / 重点物料独供（跨项目、最新月，与份额管理同源）
   const { data: shareStats, isLoading: shareStatsLoading } = useShareDashboardStats();
-  // 库存概览：用于「库存天数 < 3」这张卡（与库存页同源，实时口径）
+  // 卡片 4：库存概览（与库存页同源，实时口径）
   const { data: projectOverview, isLoading: overviewLoading } = useInventoryProjectOverview();
-  // 变更统计：用于「变更进行中」这张卡（与变更页页头同源）
+  // 卡片 5：变更统计（与变更页页头同源）
   const { data: changeSummary, isLoading: changeSummaryLoading } = useChangeSummary();
+  // ② 风险热点矩阵（唯一预警来源）
+  const { data: alerts } = useAlerts();
+
   const [formOpen, setFormOpen] = useState(false);
   const [selected, setSelected] = useState<Supplier | null>(null);
-  /* 地图取点录入：pickMode = 取点模式；preset = 最近一次取点的省份 + 坐标（打开弹窗时预填） */
   const [pickMode, setPickMode] = useState(false);
   const [preset, setPreset] = useState<{ city: string; longitude: number; latitude: number } | null>(null);
 
@@ -144,14 +164,11 @@ export default function DashboardPage() {
   };
 
   /* ---- 地图项目切片器 ---- */
-  // 切片器项目列表（page_size=100，与供应商列表「项目」Tab 同源联动）
   const { data: sliceProjectList } = useProjects({ page: 1, page_size: 100 });
   const [sliceProjectId, setSliceProjectId] = useState<string>(SLICE_ALL);
-  // 选中项目 → 拉该项目下供应商（含地图点位字段，后端 /api/projects/{id}/suppliers）
-  const {
-    data: projectSuppliers = [],
-    isLoading: projectSuppliersLoading,
-  } = useProjectSuppliers(sliceProjectId === SLICE_ALL ? null : Number(sliceProjectId));
+  const { data: projectSuppliers = [], isLoading: projectSuppliersLoading } = useProjectSuppliers(
+    sliceProjectId === SLICE_ALL ? null : Number(sliceProjectId)
+  );
 
   const mapSuppliers = sliceProjectId === SLICE_ALL ? suppliers : projectSuppliers;
   const mapLoading = sliceProjectId === SLICE_ALL ? isLoading : projectSuppliersLoading;
@@ -265,9 +282,11 @@ export default function DashboardPage() {
       urgentProjectIds,
       goInventory,
       changeSummary,
+      goChanges,
       navigate,
     ]
   );
+
   const statsLoading =
     projectLoading || materialLoading || shareStatsLoading || overviewLoading || changeSummaryLoading;
 
@@ -284,11 +303,18 @@ export default function DashboardPage() {
             <section id="overview" className="scroll-mt-20">
               <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
               <p className="mt-2 text-muted-foreground">
-                供应链整体态势总览：关键指标、供应商分布与待办事项。
+                供应链整体态势总览：关键指标、风险分布与供应商分布。
+                {alerts?.base_month && (
+                  <span className="ml-1 text-muted-foreground/80">
+                    · 份额基准月 {alerts.base_month}
+                    {alerts.horizon.length > 0 &&
+                      ` · 供需窗口 ${alerts.horizon[0]} ~ ${alerts.horizon[alerts.horizon.length - 1]}`}
+                  </span>
+                )}
               </p>
             </section>
 
-            {/* 顶部统计卡：五张全部为实时联动数据（变更进行中已接入变更管理模块） */}
+            {/* ① 顶部统计卡：五张全部为实时联动数据，口径与各板块同源 */}
             <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
               {stats.map((stat) => (
                 <Card
@@ -312,16 +338,7 @@ export default function DashboardPage() {
                     ) : (
                       <p className="text-2xl font-semibold tracking-tight tabular-nums">{stat.value}</p>
                     )}
-                    <p
-                      className={cn(
-                        "text-xs",
-                        stat.hintTone === "danger"
-                          ? "font-medium text-red-600 dark:text-red-400"
-                          : stat.hintTone === "warn"
-                            ? "font-medium text-amber-600 dark:text-amber-400"
-                            : "text-muted-foreground"
-                      )}
-                    >
+                    <p className={cn("text-xs", stat.hintTone ? TONE_CLASS[stat.hintTone] : "text-muted-foreground")}>
                       {stat.hint}
                     </p>
                   </CardContent>
@@ -329,7 +346,12 @@ export default function DashboardPage() {
               ))}
             </div>
 
-            {/* 全国供应商分布地图（整幅占满） */}
+            {/* ② 项目风险热点矩阵（点格直接进板块） */}
+            <div className="mt-4">
+              <ProjectRiskMatrix rows={alerts?.by_project ?? []} baseMonth={alerts?.base_month ?? ""} />
+            </div>
+
+            {/* ③ 全国供应商分布地图（原位置下移：与风险无关，是「我们在哪」） */}
             <div className="mt-6">
               <Card className="overflow-hidden">
                 <CardContent className="p-0">
@@ -341,7 +363,6 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      {/* 项目切片器：选择项目 → 地图只显示该项目供应商 */}
                       <Select value={sliceProjectId} onValueChange={setSliceProjectId}>
                         <SelectTrigger className="w-44">
                           <SelectValue placeholder="选择项目" />
@@ -361,7 +382,10 @@ export default function DashboardPage() {
                         <div className="flex items-center gap-2">
                           {RISK_ORDER.map((risk) => (
                             <Badge key={risk} variant="outline" className="gap-1 px-2 py-0.5 text-xs font-normal">
-                              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: RISK_META[risk].color }} />
+                              <span
+                                className="inline-block h-2 w-2 rounded-full"
+                                style={{ backgroundColor: RISK_META[risk].color }}
+                              />
                               {riskCounts[risk]}
                             </Badge>
                           ))}
@@ -385,7 +409,6 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <div className="relative h-[600px] p-2 sm:h-[680px]">
-                    {/* 取点模式提示条 */}
                     {pickMode && (
                       <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-4">
                         <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background px-4 py-2 text-xs shadow-sm">
@@ -404,7 +427,6 @@ export default function DashboardPage() {
                     )}
                     <ChinaMap
                       className="h-full w-full"
-                      // 取点模式下隐藏供应商散点：避免点位遮住目标区域/点击散点无响应，取点更清爽
                       suppliers={pickMode ? [] : mapSuppliers}
                       pickMode={pickMode}
                       onSupplierClick={(s) => setSelected(s)}
@@ -415,17 +437,14 @@ export default function DashboardPage() {
               </Card>
             </div>
 
-            {/* 页脚提示 */}
             <p className="mt-6 text-center text-xs text-muted-foreground">
-              本页统计均与各业务模块实时同源；地图仅展示已录入的供应商点位。
+              顶部指标与各业务板块同源；风险矩阵由预警聚合接口实时计算。地图仅展示已录入的供应商点位。
             </p>
           </div>
         </main>
       </div>
 
-      {/* 录入弹窗：选了项目时，候选供应商限定为该项目下已挂载的；地图选点后自动预填省份/坐标 */}
       <SupplierFormDialog open={formOpen} onOpenChange={setFormOpen} project={sliceProject ?? null} preset={preset} />
-      {/* 点位详情弹窗 */}
       <SupplierDetailDialog supplier={selected} onClose={() => setSelected(null)} />
     </div>
   );

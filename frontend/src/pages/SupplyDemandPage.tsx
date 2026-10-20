@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Boxes,
@@ -75,13 +75,24 @@ const SAFE_DOT = "#22c55e";
 
 export default function SupplyDemandPage() {
   const navigate = useNavigate();
+  const [sp] = useSearchParams();
   const { data: projectList, isLoading } = useProjects({ page: 1, page_size: 100 });
   const projects = projectList?.items ?? [];
   const allProjectIds = useMemo(() => new Set(projects.map((p) => String(p.id))), [projects]);
 
-  /* ---- 明细分析范围：默认**不选**（没有下拉筛选就不要有内容） ---- */
-  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
-  const [selectedMaterials, setSelectedMaterials] = useState<Set<string>>(new Set());
+  /* ---- 明细分析范围：默认**不选**（没有下拉筛选就不要有内容） ----
+     ★ 深链支持（供 Dashboard 预警「去处理」落地）：
+       ?project=1,2  → 预选项目；?pn=PN123 → 预选物料。
+       首屏从 URL 初始化，之后完全由下拉控制；下面的重置 effect 必须跳过首次执行，
+       否则会把 URL 带进来的物料清空（表现：跳过来物料没了、图表一片空）。 */
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(() => {
+    const raw = sp.get("project") ?? "";
+    return new Set(raw.split(",").map((x) => x.trim()).filter(Boolean));
+  });
+  const [selectedMaterials, setSelectedMaterials] = useState<Set<string>>(() => {
+    const raw = sp.get("pn") ?? "";
+    return new Set(raw.split(",").map((x) => x.trim()).filter(Boolean));
+  });
   const hasProjectSelected = selectedProjectIds.size > 0;
   const hasMaterialSelected = selectedMaterials.size > 0;
 
@@ -119,7 +130,22 @@ export default function SupplyDemandPage() {
     () => Array.from(selectedProjectIds).sort().join(","),
     [selectedProjectIds]
   );
+  /**
+   * 项目范围变化才清空物料选择。
+   *
+   * ★ 不能用 "skip 第一次" 的 ref：React StrictMode 下 effect 会连跑两次，
+   *   第一次就消耗掉标记，第二次照样把 URL 深链带进来的 pn 清空
+   *   （症状：从 Dashboard 点「去处理」跳过来，物料选择是 0/1、图表一片空）。
+   *   改为记录上一次的范围值，值没变就直接返回 —— 重跑也不误伤。
+   */
+  const lastScopeRef = useRef<string | null>(null);
   useEffect(() => {
+    if (lastScopeRef.current === null) {
+      lastScopeRef.current = projectScopeKey;
+      return;
+    }
+    if (lastScopeRef.current === projectScopeKey) return;
+    lastScopeRef.current = projectScopeKey;
     setSelectedMaterials(new Set());
   }, [projectScopeKey]);
 

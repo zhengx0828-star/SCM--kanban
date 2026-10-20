@@ -54,6 +54,7 @@ import type {
   ShareRiskItem,
   ShareSummary,
 } from "../types/share";
+import type { AlertResponse } from "../types/alert";
 import type {
   BaseSite,
   BaseSiteInput,
@@ -626,5 +627,16 @@ export const changeTaskApi = {
 
   remove(taskId: number) {
     return apiClient.delete(`/change-tasks/${taskId}`).then((res) => res.data);
+  },
+};
+
+/**
+ * 预警中心（Dashboard 即预警中心）。
+ * 只读聚合接口，不写任何表；判定全部在服务端复用各业务模块的函数，
+ * 所以这里的数字与板块页必然一致。
+ */
+export const alertApi = {
+  get(params: { project_ids?: string; base_month?: string; horizon?: number } = {}) {
+    return apiClient.get<AlertResponse>("/alerts", { params }).then((res) => res.data);
   },
 };

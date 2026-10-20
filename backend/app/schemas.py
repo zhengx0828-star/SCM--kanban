@@ -1346,3 +1346,113 @@ class ChangeImportResult(BaseModel):
     updated_tasks: int = 0
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# 预警中心（Dashboard 即预警中心）
+#
+# 设计要点：
+#   · 预警是**派生数据**，不落库。每次请求实时从四个业务模块 + 数据缺口现算，
+#     因此不存在「源数据已修好、预警还红着」的情况。
+#   · 每个条目的判定逻辑都不在本文件实现，全部复用各模块既有函数
+#     （inventory._doh_bucket_of / changes._task_state / share._risk_chain_type），
+#     保证 Dashboard 的数字与板块页面永远对得上。
+#   · severity = **紧急程度**，不是严重程度：p0 已发生 / p1 将发生 / p2 偏离。
+#     它只回答「什么时候会出事」，不衡量影响大小；影响大小由 impact 单独表示。
+#     跨来源唯一可比的就是它（件、天、百分点不能相加）。
+#   · as_of 每条自带时间口径（份额是月快照、库存是今日、变更是今日、供需是某月），
+#     页面不允许统一写「本月」。
+# ---------------------------------------------------------------------------
+
+ALERT_SEVERITY_ORDER = ("p0", "p1", "p2")
+ALERT_SOURCE_ORDER = ("supply", "inventory", "change", "share", "data")
+
+# 供需三档阈值。★ 与前端 lib/supply-risk.ts 的 TIGHT_RATIO_MIN / TIGHT_RATIO_MAX 必须一致：
+# 那边负责热力图着色，这边负责预警判定。改一处必须改两处，并跑
+# scripts/verify_supply_risk_parity.mjs 比对。
+ALERT_SUPPLY_TIGHT_MIN = 1.0
+ALERT_SUPPLY_TIGHT_MAX = 1.3
+ALERT_HORIZON_DEFAULT = 3
+
+
+class AlertRef(BaseModel):
+    """结构化跳转引用。前端统一由 buildAlertLink() 生成 URL，后端不返回路由字符串
+    （避免后端耦合前端路由表）。"""
+
+    project_id: Optional[int] = None
+    material_id: Optional[int] = None
+    pn: Optional[str] = None
+    supplier_id: Optional[int] = None
+    supplier_code: Optional[str] = None
+    base_id: Optional[int] = None
+    month: Optional[str] = None
+    task_id: Optional[int] = None
+    change_id: Optional[int] = None
+    bucket: Optional[str] = None
+
+
+class AlertProjectBrief(BaseModel):
+    project_id: int
+    code: str = ""
+    name: str = ""
+
+
+class AlertItem(BaseModel):
+    """一条预警。"""
+
+    fingerprint: str = Field(..., description="稳定标识：同一问题反复出现时值不变（前端 key + 将来做「忽略」的锚点）")
+    source: str = Field(..., description="supply / inventory / change / share / data")
+    kind: str = Field(..., description="细分类型，决定图标与文案")
+    severity: str = Field(..., description="p0 已发生 / p1 将发生 / p2 偏离")
+    title: str
+    detail: str = ""
+    as_of: str = Field("", description="该条的时间口径：月份 YYYY-MM 或日期 YYYY-MM-DD")
+    impact: float = Field(0, description="排序用的量（件 / 天 / 百分点 / 单元数）。★ 单位因 kind 而异，只在同 kind 内可比")
+    due_in_days: Optional[int] = Field(
+        None,
+        description="距出事天数 = 事件日 − 今天。负数或 0 = 已经发生/今天到点；None = 无事件日（份额、数据缺口这类状态型风险）",
+    )
+    project: AlertProjectBrief
+    ref: AlertRef
+
+
+class AlertDimStat(BaseModel):
+    severity: Optional[str] = Field(None, description="该维度最严重级别；None = 该维度无信号")
+    count: int = 0
+
+
+class AlertProjectWorst(BaseModel):
+    kind: str
+    title: str
+    as_of: str = ""
+
+
+class AlertProjectRow(BaseModel):
+    """项目 × 维度的热点行（Dashboard 矩阵一行）。"""
+
+    project_id: int
+    code: str = ""
+    name: str = ""
+    severity: Optional[str] = None
+    counts: dict[str, int] = Field(default_factory=dict, description="p0 / p1 / p2 计数")
+    dims: dict[str, AlertDimStat] = Field(default_factory=dict, description="键为 source，值为该维度最高级 + 条数")
+    worst: Optional[AlertProjectWorst] = None
+
+
+class AlertThresholds(BaseModel):
+    """阈值随响应下发 → 前端图表不再硬编码，单一真相源在后端。"""
+
+    supply: dict[str, float]
+    share: dict[str, float]
+    inventory: dict[str, float]
+
+
+class AlertResponse(BaseModel):
+    generated_at: datetime
+    base_month: str = Field(..., description="份额口径基准月（默认最新有份额数据的月份）")
+    horizon: list[str] = Field(default_factory=list, description="供需关注窗口（月份列表）")
+    thresholds: AlertThresholds
+    counts: dict[str, int] = Field(default_factory=dict, description="p0 / p1 / p2 / total")
+    by_source: dict[str, int] = Field(default_factory=dict)
+    by_project: list[AlertProjectRow] = Field(default_factory=list)
+    items: list[AlertItem] = Field(default_factory=list)

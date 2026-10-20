@@ -16,6 +16,7 @@ from sqlalchemy import text
 from .database import Base, engine
 from .migrations import run_migrations
 from .routers import (
+    alerts,
     bases,
     changes,
     inventory,
@@ -82,6 +83,8 @@ app.include_router(inventory.router)
 app.include_router(changes.router)
 app.include_router(changes.task_router)
 app.include_router(changes.type_router)
+# 预警中心：只读聚合，不写任何表。必须放在各业务 router 之后（它 import 它们的判定函数）。
+app.include_router(alerts.router)
 
 
 # ---------------------------------------------------------------------------

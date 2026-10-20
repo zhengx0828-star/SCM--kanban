@@ -45,7 +45,28 @@
 | 端口 | 后端 8000 / 前端 **80**（浏览器访问 `http://localhost`，不带端口号）。`vite.config.ts` 已开 `strictPort: true` —— 80 被占时**直接报错退出**，不会静默跳 81（2026-10-19 改） |
 | Git | `master` 分支，`origin` = `https://github.com/zhengx0828-star/SCM--kanban.git`（凭证已就位，可直接 `git push`）｜**git 只在 WorkBuddy 自带 PortableGit 中、未加系统 PATH**（2026-10-14 核实） |
 
-**功能模块**：Dashboard、供需管理（含**客户需求版本化**）、份额管理、库存管理（信号塔）、主数据（供应商/物料/供应关系/项目）、规则手册。API 全量清单见 `README.md`「十一、API 概览」。
+**功能模块**：Dashboard（**2026-10-20 起即预警中心**）、供需管理（含**客户需求版本化**）、份额管理、库存管理（信号塔）、变更管理、主数据（供应商/物料/供应关系/项目）、规则手册。API 全量清单见 `README.md`「十一、API 概览」。
+
+### 预警中心（Dashboard 内，无独立页面）
+
+用户明确拍板：**不单独开 `/alerts` 页面，Dashboard 本身就是预警中心**。改这块前先读这一条，否则很容易做出第三套口径。
+
+- **不落库**。预警是派生数据，每次 `GET /api/alerts` 实时算；因此**不做已读/忽略**（标了已读数字还在，两套状态会打架）。
+- **判定逻辑零复制**。`routers/alerts.py` 直接 import 各模块既有函数：
+  `inventory._assemble / _unknown_kind`、`changes._load_changes / _task_state`、`share._load_records / _risk_chain_type`。
+  **唯一例外是供需三档**：原本只在前端 `lib/supply-risk.ts`，后端按原样移植了一份。改 `TIGHT_MIN/MAX`（后端 `ALERT_SUPPLY_TIGHT_*`、前端 `TIGHT_RATIO_MIN/MAX`）必须两边同改，并跑 `scripts/verify_alerts.py`。
+- **顶部 5 张卡的口径不要动**（2026-10-20 用户明确要求「之前卡片的内容不要动」，我改成 P0/P1 计数后被要求恢复）。固定为：项目/物料总数 · 份额波动物料 · 重点物料独供数量 · 库存天数 < 3 · 变更进行中；数据各接 `share-stats` / `project-overview` / `changes-summary`，与所属板块同源，点进去行数 == 卡上数字。
+  - 不要用 `/api/alerts` 的计数替换卡片数值：`alerts` 数的是「风险条数」，卡片数的是「物料数 / 推算单元数 / 变更单数」，口径不同，硬套等于改掉卡片含义。
+- **风险矩阵只认 `/api/alerts` 一个来源**（矩阵 + 页头的基准月/供需窗口）。
+- **`by_project` 必须包含无信号项目**（`severity=None`、计数 0），否则老板会问「另一个项目呢」。
+- **份额基准月不能取 `max(month)`**：月末结转生成的空档月（`share_current` 全 NULL）也是合法记录，取它会掉进空月、把当月风险整片遮住。必须 `WHERE share_current IS NOT NULL`。
+- **排序键：`severity` → `due_in_days` → `impact` → `fingerprint`**。`impact` 单位因 kind 而异（件/天/百分点/单元数），只在同 kind 内可比；跨来源唯一能比的是 `due_in_days`（距出事天数），所以它排在 impact 前面。来源固定序保留但只作同档同天数的兜底 —— 让它主导会把「已断货」排到「三个月后的缺口」后面。无事件日（份额 / 数据缺口）沉到同档末尾。`scripts/verify_alerts.py` 有排序断言。
+- **第 6 类来源还没接：供应商红黄绿**。地图点位按 `suppliers.risk_level` 着色（红/黄/绿，NULL=未评估），用户明确「那也是风险预警，只是还没设置规则」。规则定下来后加 `source="supplier"` 读 `risk_level`，**不要在别处另算一套判定**；同时要补矩阵列、`ALERT_SOURCE_LABEL`、`ALERT_TARGET_LABEL`。
+- **首页只有计数与分布，没有任何清单或摘要条**（2026-10-20 用户连删两块：先删「预警明细」，再删「紧急」置顶条）。结构固定为三段：5 张卡 → 项目风险热点矩阵 → 供应商地图。
+  - 约束：矩阵「紧急」列（该项目最严重那一条的标题）是首页**唯一**的具体信息；矩阵格是**唯一**的详情入口，点格必须带项目过滤直接进板块（`buildProjectDimLink`）。别再往首页加明细表或摘要条，也别把格子做成纯展示。
+- **首页只给老板看，不写执行者语气**：不要出现「去处理」「点击查看」这类命令/操作措辞。跳转用**板块名 + ↗**（「份额管理 ↗」），写成「去哪」而不是「去干什么」。明细行整行即链接，行尾是位置标签不是按钮。
+- 验证：`python scripts\verify_alerts.py`（拷库到临时目录造库存单元/变更单/缺 BOM，**不碰正式库**），期望 `PASS`。
+- 深链：SupplyDemandPage 支持 `?project=&pn=`（2026-10-20 新增）。该页清空物料用的 effect **不能写成「跳过第一次」** —— StrictMode 下会跑两次，第一次就消耗掉标记，第二次照样把 URL 带来的 `pn` 清空。改为记录上一次 scope 值比较。
 
 ---
 
