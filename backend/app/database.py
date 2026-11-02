@@ -1,5 +1,6 @@
 """数据库引擎与会话管理（SQLite 本地开发）。"""
 
+import os
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
@@ -7,8 +8,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 # SQLite 数据库文件路径：始终定位到 backend/products.db，不依赖进程 cwd
-# 这样无论从项目根目录还是 backend/ 启动 uvicorn，都使用同一份数据
-DB_PATH = Path(__file__).resolve().parent.parent / "products.db"
+# 这样无论从项目根目录还是 backend/ 启动 uvicorn，都使用同一份数据。
+# 容器部署可用 SCM_DB_PATH 指到挂载卷（如 /data/products.db），实现数据持久化。
+DB_PATH = Path(
+    os.environ.get("SCM_DB_PATH")
+    or (Path(__file__).resolve().parent.parent / "products.db")
+)
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DATABASE_URL = f"sqlite:///{DB_PATH.as_posix()}"
 
 engine = create_engine(

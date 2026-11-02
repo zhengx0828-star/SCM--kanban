@@ -16,11 +16,12 @@
 | 供需管理 | `/supply-demand` | 项目级客户需求（1-12 月）、供应商产能、BOM 用量系数、供需平衡分析。项目／物料双下拉筛选（物料支持 **0/N 多选**，勾选即时生效、面板不关闭）；**供应系数热力图**（行=物料 · 列=1-12 月，格子值 = 产能÷需求）+ 供需趋势柱·折线组合；需求与 BOM 的 Excel **双 sheet 导入**（`客户需求` / `物料BOM与产能`，模板可下载）；项目卡片带**需求版本徽标**、客户需求区块标注当前版本口径 |
 | 项目供需明细 | `/supply-demand/projects/:projectId` | 项目下的供应明细、关联物料/供应商，录入需求 / 产能 / BOM 系数；**客户需求版本化**（折叠下拉切换版本、另存为新版本、设为当前版；历史版本只读）；**四元组一行式快速新增**供应关系（自动建 L1 主数据并挂载到项目） |
 | 份额管理 | `/share` | 项目维度份额概览：KPI 卡 + 风险排行 + 份额×评分四象限 + 月末结转 |
-| 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（含基地配额列）+ 行内编辑/删除 + 基地拉线配置（动态基地列，bases 随行快照） |
+| 份额明细 | `/share/records` | 份额记录明细：手动录入 + Excel 导入（**长表：一行 = 供应商 × 段 × 基地**，模板可下载；旧宽表成对基地列仍兼容）+ 行内编辑/删除 + 动态基地列（bases 随行快照） |
 | 主数据 | `/materials` | 供应商 / 物料 / 供应关系 / 项目 统一管理页（含地图点位、风险等级） |
 | 规则手册 | `/rules` | 项目 SOP 手册：业务规则与数据口径，按 module 分组 |
 | 库存管理 | `/inventory` | 库存信号塔：项目×基地×物料 推算单元，30 天日度 DOH 推算、动态安全库存、Excel 导入、行内手改重算、顶部风险时间漏斗四卡 |
 | 变更管理 | `/changes` | 变更单全生命周期：新建 / 作废 / 归档 + 多级任务树与自绘甘特图（任意层级折叠、超期红虚线、迟交复盘）+ 预警（超期 / 临期三级分组）+ 燃尽图 + 类型·状态·项目三饼图分析 + 负责人偏差排行 + Excel 双 sheet 导入导出；项目卡片墙按超期数排序、边框即信号（红边=超期 / 黄边=临期） |
+| 供应商细分 | `/segments` | 重点物料的供应商评价：12 项统一五档（1/0.7/0.5/0.3/0）→ 能力 × 意愿两维 → 四象限（战略伙伴 / 强势依赖 / 重点培养 / 观察退出）。**评价单元 = 期间 × 物料 PN × 供应商，不带项目**；得分是写入快照，改权重不回头改历史。**红黄牌记在供应商级，牌期间两维归零但不覆盖档位原值**，解牌自动恢复。另含象限图例卡（家数/占比/动作）、明细表、单条抽屉（双雷达 + 12 项 + 跨期轨迹）、整批「复制上期到本期」、**Excel 导入**（19 列模板可下载，一行错则整批不写并逐行报错） |
 
 ---
 
@@ -41,7 +42,7 @@
 - ECharts 6（图表 + 中国地图）、next-themes（明暗主题）、sonner（toast）
 
 **数据库模型（三层主数据 + 各模块业务表，核心业务模型）**
-- L1 主数据：`projects` / `materials`（PN 唯一）/ `suppliers`（含 `risk_level` 地图风险等级，红/黄/绿/NULL=未评估）
+- L1 主数据：`projects` / `materials`（PN 唯一，含 `segment` 工艺段：模组/电芯…，**一个物料只属于一个段**）/ `suppliers`（含 `risk_level` 地图风险等级，红/黄/绿/NULL=未评估）
 - L2 供应关系：`supply_relations`（material × supplier 唯一，四元组）
 - L3 项目明细：`project_supply_relations`（UNIQUE(project, supply_relation)，模块扩展字段 demand/capacity/bom_factor 等）
 - L3 需求版本：`project_demand_versions`（UNIQUE(project_id, seq) + 部分唯一索引 `uq_demand_version_current`，客户需求按版本追加 12 月快照，`is_current` 标记当前版；`project_supply_relations.demand` 降级为「当前版投影副本」）
@@ -468,8 +469,9 @@ scm-kanban/
 │   │   ├── database.py            # SQLAlchemy 引擎与会话（DB 路径固定）
 │   │   ├── models.py              # 三层主数据 + 各模块业务表 ORM 模型（含 share_records / inventory_plans / changes 等）
 │   │   ├── schemas.py             # Pydantic v2 模式
+│   │   ├── scoring.py             # 供应商细分打分纯函数（五档加权 + 牌归零，无 ORM 依赖）
 │   │   ├── routers/               # products / suppliers / materials / bases /
-│   │   │                          #   supply_relations / projects / rules / share / inventory / changes
+│   │   │                          #   supply_relations / projects / rules / share / inventory / changes / segments
 │   │   └── seed.py                # 演示数据（当前未启用）
 │   ├── scripts/smoke_test.py      # API 冒烟测试
 │   ├── requirements.txt
@@ -477,7 +479,8 @@ scm-kanban/
 ├── frontend/                      # React 应用
 │   ├── src/
 │   │   ├── pages/                 # Dashboard / SupplyDemand / ProjectSupplyDetail /
-│   │   │                          #   Share / ShareRecords / Inventory / SupplierMaster / Products / Rules
+│   │   │                          #   Share / ShareRecords / Inventory / Changes /
+│   │   │                          #   Segments（供应商细分）/ SupplierMaster / Products / Rules
 │   │   ├── components/            # ui/（自研 MultiSelectDropdown 绝对定位面板，避开 radix 浮层在 dev 下的错位）
 │   │   │                          #   + projects/（SupplyCoefHeatmap 供应系数热力图、
 │   │   │                          #     DemandExcelImportDialog 需求/BOM 双 sheet 导入、
@@ -519,6 +522,7 @@ scm-kanban/
 | --- | --- | --- |
 | GET | `/api/materials` | 分页列表 |
 | POST | `/api/materials` | 新增（PN 唯一） |
+| PATCH | `/api/materials/{id}` | 修改描述性字段（name / category / **segment** / spec / remark），PN 不可改 |
 | DELETE | `/api/materials/{id}` | 删除 |
 
 **供应关系 supply-relations**
@@ -563,7 +567,7 @@ scm-kanban/
 | POST | `/api/share/records` | 手动新增份额记录（传 bases 自动算份额与建议配额） |
 | PUT | `/api/share/records/{id}` | 手动修改（显式传 share_current 视为手改并锁定；只传 bases 则清手改自动重算） |
 | DELETE | `/api/share/records/{id}` | 删除份额记录（剩余记录自动重算） |
-| POST | `/api/share/import` | Excel 导入份额数据（浏览器「选择文件」上传，请求体 octet-stream；openpyxl 支持成对基地列；校验 QDC 五档、份额 0-100；`file_path` 参数仅兼容本地脚本） |
+| POST | `/api/share/import` | Excel 导入份额数据（浏览器「选择文件」上传，请求体 octet-stream）。**长表**（`段 / 基地 / 拉线数 / 基地份额` 成列，多行按 PN+供应商聚合成一条记录）为主，旧宽表（`基地A_份额 / 基地A_线数` 成对两列）仍兼容；校验 QDC 五档、份额 0-100、同物料份额和 100%（±1%）、同段同基地合计 100%（±1%）、同物料跨段拦截；`file_path` 参数仅兼容本地脚本 |
 | POST | `/api/share/rollover` | 月末结转：本月 → 下月空档 |
 
 **库存信号塔 inventory**
@@ -605,6 +609,26 @@ scm-kanban/
 | POST | `/api/change-tasks/{id}/toggle` | 勾选 / 取消勾选任务 |
 | GET / POST | `/api/change-types` | 变更类型列表 / 新增 |
 | PATCH / DELETE | `/api/change-types/{id}` | 修改 / 删除类型（仅零引用可删） |
+
+**供应商细分 supplier-segments / supplier-cards**
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/supplier-segments` | 评价列表（period 默认最新有数据的月份 / segment / q 过滤） |
+| GET | `/api/supplier-segments/{id}` | 单条（含物料供应商名称与当前生效牌） |
+| POST | `/api/supplier-segments` | 新增 / 覆盖（同 期间+PN+供应商 视为同一条），写入时算分并快照 |
+| PUT / DELETE | `/api/supplier-segments/{id}` | 修改（重算）/ 删除 |
+| GET | `/api/supplier-segments/summary` | 各象限条数、平均分、未评级数、红牌数 |
+| GET | `/api/supplier-segments/periods` | 有数据的月份（倒序） |
+| GET | `/api/supplier-segments/prefill` | 取上期档位（复制上期用） |
+| GET | `/api/supplier-segments/history` | 单点跨期轨迹 |
+| POST | `/api/supplier-segments/copy-period` | 整批复制上期到本期（已存在则跳过） |
+| POST | `/api/supplier-segments/import` | Excel 导入（请求体传文件；`default_period` 兜底期间列）。**一行错整批不写**，返回逐行 `errors` |
+| GET / PUT | `/api/supplier-segments/config` | 阈值（默认 50）/ 业务权重 / `preset=business\|equal` |
+| GET / POST | `/api/supplier-cards` | 红黄牌列表（`active=true` 只返生效中）/ 打牌 |
+| PUT | `/api/supplier-cards/{id}/release` | 解牌（写 `effective_to` + 原因，重算受影响月份） |
+
+> 打分纯函数在 `backend/app/scoring.py`，不依赖 ORM/DB，`scripts/verify_segments.py` 直接断言 40 条口径。
+> **牌不是数据覆盖**：牌期间两维归零但档位原值保留，解牌后自动恢复 —— 详见 `AGENT.md`「坑 25」。
 
 **预警中心 alerts**（只读聚合，不写任何表；Dashboard 唯一消费方）
 | 方法 | 路径 | 说明 |

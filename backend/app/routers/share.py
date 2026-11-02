@@ -839,6 +839,24 @@ async def import_share_records(
         # 否则下面取值时用 cols["share"] / cols["lines"] 永远取不到 → 基地整列被静默丢弃。
         base_cols.setdefault(bname, {})[base_kind_map[m.group("kind")]] = i
 
+    # ---------- 长表模式（推荐模板） ----------
+    # 宽表把「基地」写进列名（基地A_份额 / 基地A_线数），段一换、基地一多，表头和列数就得改，
+    # 同一项目的模组段与电芯段只能拆成两块表头上下堆叠 —— 而导入只解析第一行表头，
+    # 第二块会被当数据行解析 → 「未找到供应关系」→ 整批 422。
+    # 长表把基地降级为数据列：一行 = 供应商 × 段 × 基地，列数固定，段与基地随便加。
+    def exact_idx(*names: str) -> Optional[int]:
+        """按整格精确匹配列名（不用子串，避免「基地C份额」被 "C" 命中这类串味）。"""
+        for i, h in enumerate(header):
+            if h is not None and str(h).strip() in names:
+                return i
+        return None
+
+    idx_base = exact_idx("基地", "基地名称")
+    idx_lines = exact_idx("拉线数", "线数", "条数")
+    idx_bshare = exact_idx("基地份额", "基地配额")
+    idx_seg = exact_idx("段", "工艺段", "模块")
+    long_mode = idx_base is not None and idx_lines is not None and idx_bshare is not None
+
     result = ShareImportResult()
     prev_month = _prev_month(month)
     relation_map: dict[tuple[str, str], SupplyRelation] = {}
@@ -859,6 +877,12 @@ async def import_share_records(
         relation_map[(rel.material.pn, rel.supplier.code)] = rel
 
     rows: list[tuple[dict, tuple[str, str]]] = []
+    # 长表模式的跨行聚合容器：同一 (PN, 供应商) 的多条「段 × 基地」行合并成一条份额记录
+    long_merged: dict[tuple[str, str], dict] = {}
+    long_order: list[tuple[str, str]] = []
+    long_segs: dict[str, set[str]] = defaultdict(set)  # pn → 该物料在文件里出现过的段
+    long_base_total: dict[tuple[str, str, str], float] = defaultdict(float)  # (pn, 段, 基地) → 各供应商份额合计
+    long_bshare_vals: list[float] = []  # 整批基地份额原值，用于口径判定
     row_num = 1  # 数据从第 2 行开始
     for row in rows_iter:
         row_num += 1
@@ -870,7 +894,93 @@ async def import_share_records(
             continue
         key = (pn, scode)
         if key not in relation_map:
+            # 长表允许同一文件里堆多个块（如模组段一块、电芯段一块），块与块之间的重复表头直接跳过
+            if long_mode and pn in ("物料PN", "物料", "PN"):
+                continue
             result.errors.append(f"第 {row_num} 行: 未找到供应关系（PN={pn}, 供应商={scode}）")
+            continue
+        if long_mode:
+            rel = relation_map[key]
+            base_name = str(row[idx_base]).strip() if row[idx_base] is not None else ""
+            seg_name = str(row[idx_seg]).strip() if idx_seg is not None and row[idx_seg] is not None else ""
+            bshare_raw = row[idx_bshare] if idx_bshare < len(row) else None
+            lines_raw = row[idx_lines] if idx_lines < len(row) else None
+            bshare_text = str(bshare_raw).strip() if bshare_raw is not None else ""
+            lines_text = str(lines_raw).strip() if lines_raw is not None else ""
+            if not base_name:
+                result.errors.append(f"第 {row_num} 行: 基地为空，请填写基地名称")
+                continue
+            if not bshare_text and not lines_text:
+                continue  # 该行没填基地数据
+            if bool(bshare_text) != bool(lines_text):
+                result.errors.append(
+                    f"第 {row_num} 行: 基地「{base_name}」份额与拉线数必须成对填写"
+                    f"（份额={bshare_text or '空'}，拉线数={lines_text or '空'}）"
+                )
+                continue
+            try:
+                bshare = float(bshare_text)
+                blines = int(float(lines_text))
+            except (TypeError, ValueError):
+                result.errors.append(f"第 {row_num} 行: 基地「{base_name}」份额/拉线数不是数字")
+                continue
+            if not (0 <= bshare <= 100):
+                result.errors.append(f"第 {row_num} 行: 基地「{base_name}」份额 {bshare} 越界（0-1 小数或 0-100）")
+                continue
+            if blines < 1:
+                result.errors.append(f"第 {row_num} 行: 基地「{base_name}」拉线数 {blines} 必须 ≥ 1")
+                continue
+            try:
+                share = float(row[idx_share]) if idx_share is not None and row[idx_share] is not None else None
+                q = float(row[idx_q]) if idx_q is not None and row[idx_q] is not None else None
+                d = float(row[idx_d]) if idx_d is not None and row[idx_d] is not None else None
+                c = float(row[idx_c]) if idx_c is not None and row[idx_c] is not None else None
+            except (TypeError, ValueError):
+                result.errors.append(f"第 {row_num} 行: 份额/评分不是数字")
+                continue
+            if share is not None and not (0 <= share <= 100):
+                result.errors.append(f"第 {row_num} 行: 份额 {share} 越界（应为 0-100）")
+                continue
+            qdc_errors = _validate_qdc(q, d, c)
+            if qdc_errors:
+                result.errors.append(f"第 {row_num} 行: {'；'.join(qdc_errors)}")
+                continue
+            # 段是物料属性：文件里的段必须与物料主档一致；主档没段则本次自动建档。
+            # 一个 PN 只属于一个段，所以「同项目同物料分模组/电芯」不会撞份额记录的唯一键。
+            mat_seg = (rel.material.segment or "").strip()
+            if seg_name and mat_seg and seg_name != mat_seg:
+                result.errors.append(
+                    f"第 {row_num} 行: 物料 {pn} 的段是「{mat_seg}」，文件写的是「{seg_name}」——一个物料只能属于一个段"
+                )
+                continue
+            if seg_name and not mat_seg:
+                rel.material.segment = seg_name
+            eff_seg = seg_name or mat_seg
+            long_segs[pn].add(eff_seg)
+
+            item = long_merged.get(key)
+            if item is None:
+                item = {"share": None, "q": None, "d": None, "c": None, "bases": {}}
+                long_merged[key] = item
+                long_order.append(key)
+            for fld, label, val in (("share", "本月份额", share), ("q", "Q", q), ("d", "D", d), ("c", "C", c)):
+                if val is None:
+                    continue
+                if item[fld] is not None and item[fld] != val:
+                    result.errors.append(
+                        f"第 {row_num} 行: 同一供应商（{pn} / {scode}）多行填了不同的{label}（{item[fld]} / {val}）"
+                    )
+                else:
+                    item[fld] = val
+            base_key = (eff_seg, base_name)
+            if base_key in item["bases"]:
+                result.errors.append(
+                    f"第 {row_num} 行: 物料 {pn} · {scode} 在「{eff_seg or '未分段'} / {base_name}」重复出现，请合并成一行"
+                )
+                continue
+            item["bases"][base_key] = {"base": base_name, "share": bshare, "lines": blines}
+            long_bshare_vals.append(bshare)
+            long_base_total[(pn, eff_seg, base_name)] += bshare
             continue
         try:
             share = float(row[idx_share]) if idx_share is not None and row[idx_share] is not None else None
@@ -940,6 +1050,44 @@ async def import_share_records(
              "bases": bases_data if bases_data else None},
             key,
         ))
+
+    if long_mode:
+        # ---- 长表收尾：口径归一 → 分段/分基地校验 → 聚合成份额记录 ----
+        nonzero_bshare = [v for v in long_bshare_vals if v != 0]
+        if nonzero_bshare:
+            if _is_decimal_scale(nonzero_bshare):
+                # 整批 ≤1 视为 0-1 小数口径：×100 后入库，保证「算的 %」与「页面显示的 %」一致
+                for item in long_merged.values():
+                    for b in item["bases"].values():
+                        b["share"] = round(b["share"] * 100, 2)
+                long_base_total = defaultdict(
+                    float, {k: round(v * 100, 2) for k, v in long_base_total.items()}
+                )
+            elif any(0 < v <= 1 for v in nonzero_bshare) and any(v > 1 for v in nonzero_bshare):
+                result.errors.append(
+                    "基地份额列口径混用：文件中既有 ≤1 的小数（如 0.5）又有 >1 的百分数（如 50），请统一口径"
+                )
+        # 一个物料只能属于一个段 —— 同一 PN 跨段会让「同项目同物料份额和 = 100%」失去意义
+        for pn, segs in long_segs.items():
+            if len(segs) > 1:
+                result.errors.append(
+                    f"物料 {pn}: 同时出现在多个段（{' / '.join(sorted(s or '未填段' for s in segs))}），"
+                    "一个物料只能属于一个段，请拆成不同物料 PN"
+                )
+        # 同一段内每个基地的供应商份额合计必须 = 100%（容差 ±1%，与「份额和」口径一致）
+        for (pn, seg, base), total in long_base_total.items():
+            if abs(total - 100) > 1:
+                result.errors.append(
+                    f"物料 {pn} · {seg or '未分段'} · 基地「{base}」: 各供应商基地份额合计 {total:.1f}% ≠ 100%（容差 ±1%）"
+                )
+        # 聚合成一条份额记录：bases 仍是 [{base, share, lines}]，模型与前端零改动
+        for key in long_order:
+            item = long_merged[key]
+            rows.append((
+                {"share_current": item["share"], "q_score": item["q"], "d_score": item["d"],
+                 "c_score": item["c"], "bases": list(item["bases"].values()) or None},
+                key,
+            ))
 
     # 「本月份额」口径归一：整批非零份额全部 ≤1 → 视为 0-1 小数口径 ×100。
     # 客户 ERP 导出的份额常是 0.71 这种比例值（= 71%）；不归一会被当成 0.71% 而报「份额和 ≠ 100%」。

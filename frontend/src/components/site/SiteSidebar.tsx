@@ -18,6 +18,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "份额管理", to: "/share" },
   { label: "库存管理", to: "/inventory" },
   { label: "变更管理", to: "/changes" },
+  { label: "供应商细分", to: "/segments" },
   { label: "供应商列表", to: "/materials" },
   { label: "规则", to: "/rules" },
 ];

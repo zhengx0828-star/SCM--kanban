@@ -131,6 +131,12 @@ class Material(Base):
     pn: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True, comment="物料 PN（唯一）")
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True, comment="物料名称")
     category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True, comment="物料分类")
+    # 工艺段（模组 / 电芯 …）：**由物料自身决定，一个 PN 只属于一个段**。
+    # 同一项目下不同段的基地集合与拉线数可以完全不同，因此份额导入必须能分段校验；
+    # 段落在物料主档（而非份额记录）上，同一物料跨段的份额记录才不会撞唯一键。
+    segment: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True, comment="工艺段（模组/电芯…，一个物料只属于一个段）"
+    )
     spec: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="规格型号")
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
@@ -559,3 +565,114 @@ class ChangeArchive(Base):
     archived_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="归档说明")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# 供应商细分（能力 × 意愿四象限）
+#
+# ★ 核心约定（见 docs/supplier-segmentation/01-方案草案.md）：
+#   - 评价单元 = 期间（月）× 物料 PN × 供应商，**不带项目**。
+#   - 12 项统一五档 1 / 0.7 / 0.5 / 0.3 / 0，库里只存档位，不存原始值
+#     （质量绩效 92.3 分、单价 4.15 元这类留在各自系统，不复制）。
+#   - cap_score / will_score 是**写入时的快照**，不是实时计算 —— 改权重不能
+#     把去年的结论一起改掉。
+#   - 红黄牌记在供应商级（supplier_cards），牌生效期间两维归零；但**档位原值不覆盖**，
+#     解牌后按原档位重算即可恢复。若打牌时把 tier_* 写成 0，解牌就永远回不来。
+# ---------------------------------------------------------------------------
+
+
+class SupplierSegment(Base):
+    """供应商细分评价：一行 = 期间 × 物料 × 供应商。"""
+
+    __tablename__ = "supplier_segments"
+    __table_args__ = (
+        UniqueConstraint("period", "material_id", "supplier_id", name="uq_segment_period_material_supplier"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    period: Mapped[str] = mapped_column(String(7), nullable=False, index=True, comment="期间 YYYY-MM")
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # 能力 6 项档位（0 / 0.3 / 0.5 / 0.7 / 1；NULL = 未评）
+    tier_a1: Mapped[float | None] = mapped_column(Float, nullable=True, comment="PN 质量绩效档")
+    tier_a2: Mapped[float | None] = mapped_column(Float, nullable=True, comment="交付达成率档")
+    tier_a3: Mapped[float | None] = mapped_column(Float, nullable=True, comment="合格率档")
+    tier_a4: Mapped[float | None] = mapped_column(Float, nullable=True, comment="成本档")
+    tier_a5: Mapped[float | None] = mapped_column(Float, nullable=True, comment="CFT 飞行稽查档")
+    tier_a6: Mapped[float | None] = mapped_column(Float, nullable=True, comment="供应商质量服务分档")
+    # 意愿 6 项档位
+    tier_w1: Mapped[float | None] = mapped_column(Float, nullable=True, comment="降价意愿档")
+    tier_w2: Mapped[float | None] = mapped_column(Float, nullable=True, comment="建库意愿档")
+    tier_w3: Mapped[float | None] = mapped_column(Float, nullable=True, comment="紧急交付意愿档")
+    tier_w4: Mapped[float | None] = mapped_column(Float, nullable=True, comment="沟通态度档")
+    tier_w5: Mapped[float | None] = mapped_column(Float, nullable=True, comment="回复及时率档")
+    tier_w6: Mapped[float | None] = mapped_column(Float, nullable=True, comment="产能弹性档")
+
+    # 派生快照（写入时算好）
+    cap_score: Mapped[float | None] = mapped_column(Float, nullable=True, comment="能力分 0-100；维度未评时 NULL")
+    will_score: Mapped[float | None] = mapped_column(Float, nullable=True, comment="意愿分 0-100；维度未评时 NULL")
+    quadrant: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="incomplete", index=True,
+        comment="partner/dependent/nurture/exit/incomplete",
+    )
+    card_snapshot: Mapped[str | None] = mapped_column(String(10), nullable=True, comment="写入时生效的牌：red/yellow/NULL")
+    cap_filled: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="能力项实际填写数（与牌无关）")
+    will_filled: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="意愿项实际填写数（与牌无关）")
+    weight_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True, comment="写入时的权重 JSON")
+    formula_version: Mapped[str] = mapped_column(String(8), nullable=False, default="v1", comment="打分公式版本")
+    evaluator: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="打分人（无登录体系，纯文本留痕）")
+    evaluated_on: Mapped[date | None] = mapped_column(Date, nullable=True, comment="打分日期")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    material: Mapped["Material"] = relationship()
+    supplier: Mapped["Supplier"] = relationship()
+
+
+class SupplierSegmentConfig(Base):
+    """供应商细分全局配置（单行，id=1）。
+
+    ★ 不写 seed：读不到就返回代码里的默认值，第一次 PUT 才落库
+      （守 lifespan 不写演示数据的纪律）。
+    """
+
+    __tablename__ = "supplier_segment_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False, default=50.0, comment="象限十字线阈值（两维共用）")
+    weights: Mapped[str | None] = mapped_column(Text, nullable=True, comment="权重 JSON：{cap:{a1:25,...}, will:{...}}")
+    preset: Mapped[str] = mapped_column(String(16), nullable=False, default="business", comment="business 业务权重 / equal 等权")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class SupplierCard(Base):
+    """红黄牌（供应商级，与评价行解耦）。
+
+    一次质量事故是整家公司的事，不会只影响一个 PN —— 所以牌挂在 suppliers 上，
+    评价时按 supplier_id 关联「当前生效牌」。
+
+    ★ 牌生效期间两维归零，但**不改 tier_* 档位数据**。
+      解牌后按原档位重算即可恢复；打牌时若把档位写成 0，解牌就永远回不来。
+    ★ 不做「到期自动失效」：事故闭环是人判断的，不是日历判断的。
+    ★ 同一供应商同时最多一张生效牌（effective_to IS NULL 的唯一一条，
+      由打牌逻辑保证，不加部分唯一索引 —— 历史行需要多张 effective_to 非空的记录）。
+    """
+
+    __tablename__ = "supplier_cards"
+    __table_args__ = (Index("ix_supplier_cards_active", "supplier_id", "effective_to"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True)
+    card: Mapped[str] = mapped_column(String(10), nullable=False, comment="red / yellow")
+    reason: Mapped[str] = mapped_column(Text, nullable=False, comment="打牌原因（必填）")
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False, index=True, comment="生效日")
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True, index=True, comment="NULL = 仍在生效")
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="打牌人")
+    released_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="解牌人")
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="解牌时刻")
+    release_reason: Mapped[str | None] = mapped_column(Text, nullable=True, comment="解牌原因")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    supplier: Mapped["Supplier"] = relationship()

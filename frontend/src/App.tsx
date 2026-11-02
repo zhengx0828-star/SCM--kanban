@@ -5,6 +5,7 @@ import InventoryPage from "./pages/InventoryPage";
 import ProductsPage from "./pages/ProductsPage";
 import ProjectSupplyDetailPage from "./pages/ProjectSupplyDetailPage";
 import RulesPage from "./pages/RulesPage";
+import SegmentsPage from "./pages/SegmentsPage";
 import SharePage from "./pages/SharePage";
 import ShareRecordsPage from "./pages/ShareRecordsPage";
 import SupplyDemandPage from "./pages/SupplyDemandPage";
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/share/records" element={<ShareRecordsPage />} />
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/changes" element={<ChangesPage />} />
+        <Route path="/segments" element={<SegmentsPage />} />
         <Route path="/rules" element={<RulesPage />} />
         {/* 旧项目页已并入供应管理 */}
         <Route path="/projects" element={<Navigate to="/materials" replace />} />

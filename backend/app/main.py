@@ -4,12 +4,15 @@
 Swagger 文档地址：http://localhost:8000/docs
 """
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import text
 
@@ -24,6 +27,7 @@ from .routers import (
     products,
     projects,
     rules,
+    segments,
     share,
     suppliers,
     supply_relations,
@@ -85,6 +89,9 @@ app.include_router(changes.task_router)
 app.include_router(changes.type_router)
 # 预警中心：只读聚合，不写任何表。必须放在各业务 router 之后（它 import 它们的判定函数）。
 app.include_router(alerts.router)
+# 供应商细分：评价 + 红黄牌（两个 router，牌挂在供应商级、与评价行解耦）
+app.include_router(segments.router)
+app.include_router(segments.card_router)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +148,36 @@ _FIELD_LABELS: dict[str, str] = {
     "archived": "归档状态",
     "change_id": "变更单 ID",
     "task_id": "任务 ID",
+    # 供应商细分
+    "period": "期间",
+    "material_code": "物料 PN",
+    "supplier_code": "供应商代码",
+    "tier_a1": "PN 质量绩效档",
+    "tier_a2": "交付达成率档",
+    "tier_a3": "合格率档",
+    "tier_a4": "成本档",
+    "tier_a5": "CFT 飞行稽查档",
+    "tier_a6": "供应商质量服务分档",
+    "tier_w1": "降价意愿档",
+    "tier_w2": "建库意愿档",
+    "tier_w3": "紧急交付意愿档",
+    "tier_w4": "沟通态度档",
+    "tier_w5": "回复及时率档",
+    "tier_w6": "产能弹性档",
+    "evaluator": "打分人",
+    "evaluated_on": "打分日期",
+    "threshold": "象限阈值",
+    "weights": "权重方案",
+    "preset": "权重预设",
+    "card": "牌色",
+    "reason": "打牌原因",
+    "effective_from": "生效日",
+    "effective_to": "解除日",
+    "release_reason": "解除原因",
+    "created_by": "打牌人",
+    "released_by": "解牌人",
+    "from_period": "源期间",
+    "to_period": "目标期间",
 }
 
 # Pydantic 错误 type → 中文释义
@@ -206,14 +243,16 @@ async def _request_validation_handler(_: Request, exc: RequestValidationError) -
         err_type = err.get("type", "")
         raw_msg = err.get("msg", "")
         path_label = _label_for_path(loc)
-        type_zh = _bound_msg(err_type, err.get("ctx", {}) or {})
+        cleaned = raw_msg.replace("Value error, ", "").strip()
+        # value_error 优先用我们自己写的中文文案（如「PN 质量绩效档 档位只能是 …」），
+        # 兜底词典里那句「字段值不合法」会把具体原因吞掉，用户不知道该改哪里。
+        type_zh = "" if (err_type == "value_error" and cleaned) else _bound_msg(err_type, err.get("ctx", {}) or {})
         if type_zh:
             if path_label:
                 msgs.append(f"{path_label}{type_zh}")
             else:
                 msgs.append(type_zh)
         else:
-            cleaned = raw_msg.replace("Value error, ", "").strip()
             if path_label:
                 msgs.append(f"{path_label}：{cleaned}")
             else:
@@ -225,3 +264,37 @@ async def _request_validation_handler(_: Request, exc: RequestValidationError) -
 @app.get("/api/health", tags=["Health"], summary="健康检查")
 def health_check() -> dict:
     return {"status": "ok", "service": "product-service", "version": app.version}
+
+
+# ---------------------------------------------------------------------------
+# 单端口部署：托管前端构建产物 frontend/dist。
+#
+# 容器/生产环境只有 Python 运行时，前端在打包阶段已构建成静态文件，由本进程
+# 一并提供，浏览器只访问一个端口（默认 8000）。开发环境下 vite dev server
+# 仍在 80 端口独立运行，CORS 白名单照旧放行，互不干扰。
+#
+# 只在 dist 目录存在时挂载 —— 没有构建产物（纯后端开发）时不留任何路由。
+# ---------------------------------------------------------------------------
+_DIST_DIR = Path(
+    os.environ.get("SCM_DIST_DIR")
+    or (Path(__file__).resolve().parents[2] / "frontend" / "dist")
+)
+
+if _DIST_DIR.is_dir():
+    _ASSETS_DIR = _DIST_DIR / "assets"
+    if _ASSETS_DIR.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):
+        """静态资源命中则直出，否则回 index.html（react-router 深链刷新不丢）。"""
+        # 未注册的接口路径必须回 JSON 404，不能被 index.html 静默吞掉
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="接口不存在")
+        if full_path in ("docs", "redoc", "openapi.json"):
+            raise HTTPException(status_code=404, detail="接口不存在")
+        target = (_DIST_DIR / full_path).resolve()
+        # is_relative_to 兜住 ../ 目录穿越
+        if full_path and target.is_file() and target.is_relative_to(_DIST_DIR.resolve()):
+            return FileResponse(target)
+        return FileResponse(_DIST_DIR / "index.html")

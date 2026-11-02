@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { AlertCircle, FileSpreadsheet, FileUp, Loader2 } from "lucide-react";
+import { AlertCircle, Download, FileSpreadsheet, FileUp, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,13 +18,16 @@ import { getApiErrorMessage } from "@/lib/utils";
  *
  * 文件选择方式与供需管理一致：点「选择文件」从本机挑选 .xlsx/.xls，
  * 文件内容随请求体上传（后端 openpyxl 解析，校验规则不变）。
- * Excel 列约定（表头行，基地按成对两列）：
- *   物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C |
- * 基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数 | ...
- * - 份额列支持 0-100 百分数与 0-1 小数（0.71 = 71%）；基地份额同理，整批统一口径即可（后端归一为百分数）
- * - 基地列表头兼容「基地A份额 / 基地A条数」等写法（下划线可省，线数 / 条数 / 拉线数等价）
+ *
+ * 支持两种表结构：
+ * 1) 长表（推荐，模板见 public/templates/share-import-template.xlsx）：
+ *      物料PN | 物料名称 | 供应商代码 | 供应商名称 | 段 | 基地 | 拉线数 | 基地份额 | 本月份额 | Q | D | C
+ *    一行 = 供应商 × 段 × 基地，多行按 (PN, 供应商代码) 聚合成一条记录。
+ *    段由物料决定，同一项目分模组 / 电芯时不用拆成两块表头。
+ * 2) 旧宽表（兼容）：基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数 …
+ *    基地写在列名里，一个文件只能有一张表头。
+ * - 份额与基地份额支持 0-100 百分数与 0-1 小数；基地份额整批统一口径（后端归一为百分数）
  * - 「本月份额」可留空：有基地数据时后端按 Σ(基地份额 × 拉线数) ÷ Σ拉线数 自动算
- * - 每条记录自带拉线数（不再有独立的基地拉线配置）
  */
 
 interface Props {
@@ -81,7 +84,7 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
         onOpenChange(v);
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>导入份额数据（{month}）</DialogTitle>
           <DialogDescription>
@@ -112,6 +115,12 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
               <FileSpreadsheet className="mr-1.5 h-4 w-4" />
               选择文件
             </Button>
+            <Button type="button" variant="ghost" asChild>
+              <a href="/templates/share-import-template.xlsx" download="份额导入模板.xlsx">
+                <Download className="mr-1.5 h-4 w-4" />
+                下载模板
+              </a>
+            </Button>
             {file && <span className="truncate text-sm text-muted-foreground">{file.name}</span>}
           </div>
 
@@ -123,15 +132,20 @@ export function ShareImportDialog({ open, onOpenChange, projectId, month }: Prop
           )}
 
           <div className="rounded-md border border-dashed bg-muted/20 p-3 text-[11px] text-muted-foreground">
-            <p className="font-medium text-foreground">导入校验规则（规则页 SOP）</p>
+            <p className="font-medium text-foreground">列顺序（固定 12 列）</p>
+            <p className="mt-0.5 break-all font-mono text-[10px] leading-4">
+              物料PN | 物料名称 | 供应商代码 | 供应商名称 | 段 | 基地 | 拉线数 | 基地份额 | 本月份额 | Q | D | C
+            </p>
+            <p className="mt-2 font-medium text-foreground">导入校验规则（规则页 SOP）</p>
             <ul className="mt-1 list-inside list-disc space-y-0.5">
-              <li>列顺序：物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C | 基地A_份额 | 基地A_线数…（基地成对两列）</li>
+              <li>一行 = 一个「供应商 × 段 × 基地」，多基地写多行，不合并单元格</li>
+              <li>「段」由物料决定（模组 / 电芯），同一物料只能属于一个段；首次导入自动建档到物料主档</li>
+              <li>同一段内，每个基地的各供应商份额合计 = 100%（容差 ±1%，99% 可接受）</li>
+              <li>「本月份额」可留空 → 按 Σ(基地份额 × 拉线数) ÷ Σ拉线数 自动算</li>
               <li>Q / D / C 仅允许五档：1 / 0.7 / 0.5 / 0.3 / 0</li>
-              <li>份额与基地份额支持 0-100（71）或 0-1 小数（0.71）两种口径，整批统一即可（会自动归一为百分数）</li>
-              <li>基地列表头兼容「基地A_份额 / 基地A_线数」与「基地A份额 / 基地A条数」；线数 ≥ 1（份额、线数成对填写）</li>
-              <li>同一物料各供应商份额和 ≈ 100%（容差 ±1%）</li>
-              <li>供应商代码与物料 PN 需已存在于主数据</li>
-              <li>手动修改过的记录（编辑过份额）不覆盖，跳过</li>
+              <li>份额与基地份额支持 0-100（50）或 0-1 小数（0.5），整批统一口径</li>
+              <li>供应商代码与物料 PN 需已存在于主数据；手动修改过的记录跳过</li>
+              <li>旧模板（基地A_份额 / 基地A_线数 成对两列）仍然兼容，但一个文件只能有一张表头</li>
             </ul>
           </div>
         </div>

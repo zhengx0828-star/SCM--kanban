@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Change, InventoryPlan, Material, SupplyRelation
-from ..schemas import MaterialCreate, MaterialList, MaterialRead
+from ..schemas import MaterialCreate, MaterialList, MaterialRead, MaterialUpdate
 
 router = APIRouter(prefix="/api/materials", tags=["Materials"])
 
@@ -87,6 +87,27 @@ def create_material(payload: MaterialCreate, db: Session = Depends(get_db)) -> M
     db.refresh(material)
     read = MaterialRead.model_validate(material)
     read.supplier_count = 0
+    return read
+
+
+@router.patch("/{material_id}", response_model=MaterialRead, summary="修改物料（段 / 分类 / 规格 / 备注）")
+def update_material(material_id: int, payload: MaterialUpdate, db: Session = Depends(get_db)) -> MaterialRead:
+    """补录或修正物料属性。
+
+    主要用途：份额 Excel 首次导入会自动把「段」写进物料主档，若第一次填错，
+    需要一个人工纠偏入口（段错了会让后续导入全部撞「一个物料只能属于一个段」）。
+    只放开描述性字段，PN 不可改（供应关系按 PN 匹配）。
+    """
+    material = _get_material(db, material_id)
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(material, field, value)
+    db.commit()
+    db.refresh(material)
+    read = MaterialRead.model_validate(material)
+    read.supplier_count = db.execute(
+        select(func.count()).select_from(SupplyRelation).where(SupplyRelation.material_id == material_id)
+    ).scalar_one()
     return read
 
 

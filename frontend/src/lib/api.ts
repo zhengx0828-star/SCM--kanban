@@ -56,6 +56,19 @@ import type {
 } from "../types/share";
 import type { AlertResponse } from "../types/alert";
 import type {
+  Segment,
+  SegmentConfig,
+  SegmentCopyResult,
+  SegmentImportResult,
+  SegmentPrefill,
+  SegmentSummary,
+  SegmentUpsertInput,
+  SupplierCard,
+  SupplierCardCreateInput,
+  SupplierCardReleaseInput,
+  TierValues,
+} from "../types/segment";
+import type {
   BaseSite,
   BaseSiteInput,
   InventoryBulkCreateResult,
@@ -638,5 +651,108 @@ export const changeTaskApi = {
 export const alertApi = {
   get(params: { project_ids?: string; base_month?: string; horizon?: number } = {}) {
     return apiClient.get<AlertResponse>("/alerts", { params }).then((res) => res.data);
+  },
+};
+
+/**
+ * 供应商细分（能力 × 意愿四象限）。
+ *
+ * 评价单元 = 期间（月）× 物料 PN × 供应商，不带项目。
+ * 得分由后端在写入时算好快照，这里只读写，不做任何前端重算 ——
+ * 否则改了权重，历史结论会跟着变。
+ */
+export const segmentApi = {
+  /** 评价列表（默认最新有数据的月份） */
+  list(params: { period?: string; segment?: string; q?: string } = {}) {
+    return apiClient.get<Segment[]>("/supplier-segments", { params }).then((res) => res.data);
+  },
+
+  /** 象限分布概览 */
+  summary(period?: string) {
+    return apiClient.get<SegmentSummary>("/supplier-segments/summary", { params: { period } }).then((res) => res.data);
+  },
+
+  /** 有数据的月份（倒序） */
+  periods() {
+    return apiClient.get<string[]>("/supplier-segments/periods").then((res) => res.data);
+  },
+
+  /** 单条 */
+  get(id: number) {
+    return apiClient.get<Segment>(`/supplier-segments/${id}`).then((res) => res.data);
+  },
+
+  /** 新增 / 覆盖（同期同料同供应商视为同一条） */
+  upsert(data: SegmentUpsertInput) {
+    return apiClient.post<Segment>("/supplier-segments", data).then((res) => res.data);
+  },
+
+  /** 修改 */
+  update(id: number, data: Partial<SegmentUpsertInput> & Partial<TierValues>) {
+    return apiClient.put<Segment>(`/supplier-segments/${id}`, data).then((res) => res.data);
+  },
+
+  remove(id: number) {
+    return apiClient.delete(`/supplier-segments/${id}`);
+  },
+
+  /** 整批复制上期到本月 */
+  copyPeriod(fromPeriod: string, toPeriod: string) {
+    return apiClient
+      .post<SegmentCopyResult>("/supplier-segments/copy-period", null, {
+        params: { from_period: fromPeriod, to_period: toPeriod },
+      })
+      .then((res) => res.data);
+  },
+
+  /** 单点跨期轨迹 */
+  history(materialCode: string, supplierCode: string) {
+    return apiClient
+      .get<Segment[]>("/supplier-segments/history", { params: { material_code: materialCode, supplier_code: supplierCode } })
+      .then((res) => res.data);
+  },
+
+  /** 取上期档位（复制上期用） */
+  prefill(period: string, materialCode: string, supplierCode: string) {
+    return apiClient
+      .get<SegmentPrefill>("/supplier-segments/prefill", {
+        params: { period, material_code: materialCode, supplier_code: supplierCode },
+      })
+      .then((res) => res.data);
+  },
+
+  /** Excel 导入（「选择文件」上传，整批校验失败则一行不写） */
+  importExcel(file: File, defaultPeriod?: string) {
+    return apiClient
+      .post<SegmentImportResult>("/supplier-segments/import", file, {
+        params: defaultPeriod ? { default_period: defaultPeriod } : undefined,
+        headers: { "Content-Type": "application/octet-stream" },
+        timeout: 60_000,
+      })
+      .then((res) => res.data);
+  },
+
+  /** 阈值 / 权重 */
+  getConfig() {
+    return apiClient.get<SegmentConfig>("/supplier-segments/config").then((res) => res.data);
+  },
+
+  updateConfig(data: Partial<SegmentConfig>) {
+    return apiClient.put<SegmentConfig>("/supplier-segments/config", data).then((res) => res.data);
+  },
+};
+
+/** 红黄牌（供应商级，与评价行解耦） */
+export const supplierCardApi = {
+  list(params: { supplier_id?: number; active?: boolean } = {}) {
+    return apiClient.get<SupplierCard[]>("/supplier-cards", { params }).then((res) => res.data);
+  },
+
+  create(data: SupplierCardCreateInput) {
+    return apiClient.post<SupplierCard>("/supplier-cards", data).then((res) => res.data);
+  },
+
+  release(id: number, data: SupplierCardReleaseInput) {
+    return apiClient.put<SupplierCard>(`/supplier-cards/${id}/release`, data).then((res) => res.data);
   },
 };

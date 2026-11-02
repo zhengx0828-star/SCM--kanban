@@ -238,6 +238,9 @@ def run_migrations(engine: Engine) -> list[str]:
         try:
             with conn.begin():
                 _add_column_if_missing(conn, "supply_relations", "capacity", "TEXT", logs)
+                # 物料工艺段（模组/电芯…）：份额导入按段校验基地份额合计，
+                # 段是物料属性，一个 PN 只属于一个段 —— 因此不进份额记录的唯一键。
+                _add_column_if_missing(conn, "materials", "segment", "VARCHAR(32)", logs)
                 _migrate_inventory_plans(conn, logs)
                 _migrate_demand_versions(conn, logs)
         finally:

@@ -193,6 +193,26 @@ export const SOP_MODULES: SopModule[] = [
     ],
   },
   {
+    key: "segments",
+    name: "供应商细分",
+    to: "/segments",
+    shot: "/sop/segments.png",
+    steps: [
+      { no: 1, flowLabel: "选期间", text: "左上「期间」选月份", tip: "月度评价；空月份标「（空）」，还没录过就是空的" },
+      { no: 2, flowLabel: "录评价", text: "「新增评价」逐条录，或「复制上期到本期」整批带过来", tip: "12 项各打一档，留空表示未评，不要用 0 代替没评" },
+      { no: 3, flowLabel: "读象限", text: "读四象限：横轴能力、纵轴意愿", tip: "十字线在 50，正好 50 分算不过关；牌的点沉在原点" },
+      { no: 4, flowLabel: "筛一格", text: "点右侧图例里的一格，明细表跟着筛", tip: "图不跟着变 —— 图要保留全局分布才看得出结构" },
+      { no: 5, flowLabel: "数红牌", text: "看「红牌供应商」卡", tip: "红牌一票否决：该供应商当月所有物料都是 0 分" },
+    ],
+    pins: [
+      { no: 1, x: 18.1, y: 18.5 },
+      { no: 2, x: 62.6, y: 13.8 },
+      { no: 3, x: 21.2, y: 36.6 },
+      { no: 4, x: 55.6, y: 47.5 },
+      { no: 5, x: 46.8, y: 25.2 },
+    ],
+  },
+  {
     key: "materials",
     name: "供应商列表",
     to: "/materials",

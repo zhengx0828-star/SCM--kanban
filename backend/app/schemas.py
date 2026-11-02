@@ -3,7 +3,17 @@
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .scoring import (
+    CARD_TYPES,
+    DIM_LABELS,
+    QUADRANTS,
+    SEGMENT_WEIGHTS,
+    SEGMENT_THRESHOLD,
+    normalize_tier,
+    weights_sum_ok,
+)
 
 ProductStatus = Literal["active", "inactive", "archived"]
 # 供应商风险等级（地图点位红黄绿）。None = 未评估；判定规则未定，录入不要求提供
@@ -173,12 +183,27 @@ class MaterialBase(BaseModel):
     pn: str = Field(..., min_length=1, max_length=64, examples=["MCU-001"])
     name: str = Field(..., min_length=1, max_length=200, examples=["主控芯片"])
     category: Optional[str] = Field(None, max_length=100, examples=["电子元器件"])
+    segment: Optional[str] = Field(None, max_length=32, examples=["模组"], description="工艺段（模组/电芯…），一个物料只属于一个段")
     spec: Optional[str] = Field(None, max_length=200, examples=["LQFP64"])
     remark: Optional[str] = Field(None, max_length=2000)
 
 
 class MaterialCreate(MaterialBase):
     """新增物料请求体。"""
+
+
+class MaterialUpdate(BaseModel):
+    """修改物料：只放开描述性字段。
+
+    刻意不允许改 pn —— 供应关系按 (PN, 供应商代码) 匹配，改 PN 会让既有的
+    份额记录、库存档案、变更单全部对不上号。
+    """
+
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    category: Optional[str] = Field(None, max_length=100)
+    segment: Optional[str] = Field(None, max_length=32, description="工艺段（模组/电芯…）")
+    spec: Optional[str] = Field(None, max_length=200)
+    remark: Optional[str] = Field(None, max_length=2000)
 
 
 class MaterialRead(MaterialBase):
@@ -1456,3 +1481,215 @@ class AlertResponse(BaseModel):
     by_source: dict[str, int] = Field(default_factory=dict)
     by_project: list[AlertProjectRow] = Field(default_factory=list)
     items: list[AlertItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# 供应商细分（能力 × 意愿四象限）
+#
+# ★ 12 项档位只认 SEGMENT_TIERS = 1 / 0.7 / 0.5 / 0.3 / 0。
+#   不做「就近取整」：0.8 静默变成 0.7 等于替打分人改答案，应当报错。
+# ---------------------------------------------------------------------------
+
+_TIER_FIELDS: tuple[str, ...] = (
+    "tier_a1",
+    "tier_a2",
+    "tier_a3",
+    "tier_a4",
+    "tier_a5",
+    "tier_a6",
+    "tier_w1",
+    "tier_w2",
+    "tier_w3",
+    "tier_w4",
+    "tier_w5",
+    "tier_w6",
+)
+
+
+def _clean_tiers(model: BaseModel, *, allow_empty: bool) -> None:
+    """把档位收敛到合法值（就地写回）；非法值报中文错误。"""
+    filled = 0
+    for name in _TIER_FIELDS:
+        raw = getattr(model, name, None)
+        if raw is None:
+            continue
+        try:
+            setattr(model, name, normalize_tier(raw))
+        except ValueError:
+            label = DIM_LABELS.get(name.replace("tier_", ""), name)
+            raise ValueError(f"{label} 档位只能是 1 / 0.7 / 0.5 / 0.3 / 0，收到 {raw}")
+        filled += 1
+    if not allow_empty and filled == 0:
+        raise ValueError("12 项全空，没有可保存的内容")
+
+
+class SegmentUpsert(BaseModel):
+    """新增 / 覆盖一条评价（同 期间 + 物料 + 供应商 视为同一条）。"""
+
+    period: str = Field(..., pattern=MONTH_PATTERN, examples=["2026-10"], description="期间（YYYY-MM）")
+    material_code: str = Field(..., min_length=1, max_length=64, description="物料 PN")
+    supplier_code: str = Field(..., min_length=1, max_length=50, description="供应商代码")
+
+    tier_a1: Optional[float] = Field(None, description="PN 质量绩效档")
+    tier_a2: Optional[float] = Field(None, description="交付达成率档")
+    tier_a3: Optional[float] = Field(None, description="合格率档")
+    tier_a4: Optional[float] = Field(None, description="成本档")
+    tier_a5: Optional[float] = Field(None, description="CFT 飞行稽查档")
+    tier_a6: Optional[float] = Field(None, description="供应商质量服务分档")
+    tier_w1: Optional[float] = Field(None, description="降价意愿档")
+    tier_w2: Optional[float] = Field(None, description="建库意愿档")
+    tier_w3: Optional[float] = Field(None, description="紧急交付意愿档")
+    tier_w4: Optional[float] = Field(None, description="沟通态度档")
+    tier_w5: Optional[float] = Field(None, description="回复及时率档")
+    tier_w6: Optional[float] = Field(None, description="产能弹性档")
+
+    evaluator: Optional[str] = Field(None, max_length=64, description="打分人")
+    evaluated_on: Optional[date] = Field(None, description="打分日期")
+    note: Optional[str] = Field(None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "SegmentUpsert":
+        _clean_tiers(self, allow_empty=False)
+        return self
+
+
+class SegmentUpdate(BaseModel):
+    """部分更新：只改传上来的字段（未传的不动，显式传 null 表示清空该项）。"""
+
+    tier_a1: Optional[float] = None
+    tier_a2: Optional[float] = None
+    tier_a3: Optional[float] = None
+    tier_a4: Optional[float] = None
+    tier_a5: Optional[float] = None
+    tier_a6: Optional[float] = None
+    tier_w1: Optional[float] = None
+    tier_w2: Optional[float] = None
+    tier_w3: Optional[float] = None
+    tier_w4: Optional[float] = None
+    tier_w5: Optional[float] = None
+    tier_w6: Optional[float] = None
+    evaluator: Optional[str] = Field(None, max_length=64)
+    evaluated_on: Optional[date] = None
+    note: Optional[str] = Field(None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "SegmentUpdate":
+        _clean_tiers(self, allow_empty=True)
+        return self
+
+
+class SegmentRead(BaseModel):
+    """一条评价的完整形态（含物料/供应商名称与当前生效牌）。"""
+
+    id: int
+    period: str
+    material_id: int
+    pn: str = ""
+    material_name: str = ""
+    segment: Optional[str] = None
+    supplier_id: int
+    supplier_code: str = ""
+    supplier_name: str = ""
+
+    tier_a1: Optional[float] = None
+    tier_a2: Optional[float] = None
+    tier_a3: Optional[float] = None
+    tier_a4: Optional[float] = None
+    tier_a5: Optional[float] = None
+    tier_a6: Optional[float] = None
+    tier_w1: Optional[float] = None
+    tier_w2: Optional[float] = None
+    tier_w3: Optional[float] = None
+    tier_w4: Optional[float] = None
+    tier_w5: Optional[float] = None
+    tier_w6: Optional[float] = None
+
+    cap_score: Optional[float] = None
+    will_score: Optional[float] = None
+    quadrant: str = "incomplete"
+    card_snapshot: Optional[str] = None
+    card: Optional[str] = Field(None, description="当前生效牌（可能与 card_snapshot 不同：牌可能是事后补录的）")
+    cap_filled: int = 0
+    will_filled: int = 0
+    evaluator: Optional[str] = None
+    evaluated_on: Optional[date] = None
+    note: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class SegmentQuadrantStat(BaseModel):
+    key: str
+    count: int
+
+
+class SegmentSummary(BaseModel):
+    period: str
+    total: int
+    by_quadrant: dict[str, int] = Field(default_factory=dict, description="五个 quadrant key 的计数")
+    avg_cap: Optional[float] = None
+    avg_will: Optional[float] = None
+    incomplete: int = 0
+    card_count: int = 0
+    red_card_count: int = 0
+
+
+class SegmentCopyResult(BaseModel):
+    from_period: str
+    to_period: str
+    copied: int
+    skipped: int
+
+
+class SegmentImportResult(BaseModel):
+    """Excel 导入结果。**有 errors 时 created/updated 一律为 0**（整批不写）。"""
+
+    created: int = 0
+    updated: int = 0
+    errors: list[str] = Field(default_factory=list, description="逐行错误；非空表示整批未导入")
+
+
+class SegmentConfigRead(BaseModel):
+    threshold: float
+    weights: dict[str, dict[str, float]]
+    preset: str
+
+
+class SegmentConfigUpdate(BaseModel):
+    threshold: Optional[float] = Field(None, gt=0, lt=100, description="象限十字线阈值（两维共用）")
+    weights: Optional[dict[str, dict[str, float]]] = None
+    preset: Optional[Literal["business", "equal"]] = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "SegmentConfigUpdate":
+        if self.weights is not None and not weights_sum_ok(self.weights):
+            raise ValueError("能力、意愿两组权重各自合计必须等于 100%")
+        return self
+
+
+class SupplierCardCreate(BaseModel):
+    supplier_id: int
+    card: Literal["red", "yellow"]
+    reason: str = Field(..., min_length=5, max_length=500, description="打牌原因（必填，至少 5 字）")
+    effective_from: Optional[date] = Field(None, description="生效日，默认今天")
+    created_by: Optional[str] = Field(None, max_length=64)
+
+
+class SupplierCardRelease(BaseModel):
+    release_reason: str = Field(..., min_length=2, max_length=500, description="解除原因")
+    effective_to: Optional[date] = Field(None, description="解除日，默认今天")
+    released_by: Optional[str] = Field(None, max_length=64)
+
+
+class SupplierCardRead(BaseModel):
+    id: int
+    supplier_id: int
+    supplier_code: str = ""
+    supplier_name: str = ""
+    card: str
+    reason: str
+    effective_from: date
+    effective_to: Optional[date] = None
+    created_by: Optional[str] = None
+    released_by: Optional[str] = None
+    release_reason: Optional[str] = None
+    active: bool = False
