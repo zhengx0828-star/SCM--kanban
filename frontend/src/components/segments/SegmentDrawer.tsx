@@ -12,6 +12,7 @@ import {
   QUADRANT_MAP,
   WILL_DIMS,
   tierLabel,
+  type CardColor,
   type Segment,
   type TierKey,
 } from "@/types/segment";
@@ -95,7 +96,7 @@ interface Props {
   onClose: () => void;
   onEdit: (segment: Segment) => void;
   onDelete: (segment: Segment) => void;
-  onCard: (segment: Segment) => void;
+  onCard: (segment: Segment, color: CardColor) => void;
   onRelease: (segment: Segment) => void;
 }
 
@@ -173,25 +174,40 @@ export function SegmentDrawer({ segment, threshold, history, onClose, onEdit, on
                     当前挂 {cardMeta.label}
                   </p>
                   <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                    牌期间能力与意愿均记 0 分，档位原值保留；解除后自动恢复。
+                    红黄牌生效期间能力与意愿均记 0 分，档位原值保留；解除后自动恢复。
                   </p>
                 </>
               ) : (
                 <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                   <ShieldCheck className="h-4 w-4" />
-                  无牌
+                  无红黄牌
                 </p>
               )}
             </div>
             <div className="flex shrink-0 gap-2">
               {cardMeta ? (
                 <Button size="sm" variant="outline" onClick={() => segment && onRelease(segment)}>
-                  解牌
+                  解除{cardMeta.label}
                 </Button>
               ) : (
-                <Button size="sm" variant="outline" onClick={() => segment && onCard(segment)}>
-                  打牌
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-red-600 hover:text-red-700"
+                    onClick={() => segment && onCard(segment, "red")}
+                  >
+                    标红牌
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-amber-600 hover:text-amber-700"
+                    onClick={() => segment && onCard(segment, "yellow")}
+                  >
+                    标黄牌
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -279,7 +295,7 @@ export function SegmentDrawer({ segment, threshold, history, onClose, onEdit, on
           </div>
 
           <p className="mt-4 text-[11px] leading-4 text-muted-foreground">
-            象限判定：能力 &gt; {threshold} 且 意愿 &gt; {threshold} 为战略伙伴；正好 {threshold} 分算不过关。
+            象限判定：能力 &gt; {threshold} 且 意愿 &gt; {threshold} 为「意愿高、能力强」；正好 {threshold} 分算不过关。
           </p>
         </SheetBody>
 

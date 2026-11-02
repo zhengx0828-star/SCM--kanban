@@ -1,4 +1,4 @@
-/** 供应商细分（能力 × 意愿四象限） */
+/** 供应商细分（意愿 × 能力四象限） */
 
 /** 12 项唯一合法的档位值。与后端 `app/scoring.py` 的 TIERS 一一对应。 */
 export const SEGMENT_TIERS = [1, 0.7, 0.5, 0.3, 0] as const;
@@ -28,10 +28,10 @@ export interface QuadrantMeta {
  * 不表示「没问题」；红同理只表示「双低」，不表示告警等级。
  */
 export const QUADRANTS: QuadrantMeta[] = [
-  { key: "partner", label: "战略伙伴", color: "#16a34a", soft: "#ecfdf5", action: "加份额 · 优先新项目 · 联合降本" },
-  { key: "dependent", label: "强势依赖", color: "#2563eb", soft: "#eff6ff", action: "保供优先 · 启动第二来源 · 高层对话" },
-  { key: "nurture", label: "重点培养", color: "#d97706", soft: "#fffbeb", action: "给辅导与试单 · 份额设上限" },
-  { key: "exit", label: "观察退出", color: "#dc2626", soft: "#fef2f2", action: "不新增份额 · 变更单立项切换" },
+  { key: "partner", label: "意愿高、能力强", color: "#16a34a", soft: "#ecfdf5", action: "加份额 · 优先新项目 · 联合降本" },
+  { key: "dependent", label: "意愿低、能力强", color: "#2563eb", soft: "#eff6ff", action: "保供优先 · 启动第二来源 · 高层对话" },
+  { key: "nurture", label: "意愿高、能力弱", color: "#d97706", soft: "#fffbeb", action: "给辅导与试单 · 份额设上限" },
+  { key: "exit", label: "意愿低、能力弱", color: "#dc2626", soft: "#fef2f2", action: "不新增份额 · 变更单立项切换" },
   { key: "incomplete", label: "未评级", color: "#94a3b8", soft: "#f8fafc", action: "补录后再评" },
 ];
 

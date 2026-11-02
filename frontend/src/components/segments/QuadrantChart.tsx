@@ -5,7 +5,12 @@ import { CARD_META, QUADRANT_MAP, type CardColor, type Segment } from "@/types/s
 import { cn } from "@/lib/utils";
 
 /**
- * 四象限散点：横轴能力、纵轴意愿。
+ * 四象限散点：横轴 Willingness（意愿）、纵轴 Capabilities（能力）。
+ *
+ * 轴序 2026-11-02 由「横能力/纵意愿」改成「横意愿/纵能力」，象限随之换位：
+ * 意愿低、能力强（右上→左上）；意愿高、能力弱（左上→右下）。
+ * 意愿高、能力强（右上）与意愿低、能力弱（左下）不动。
+ * 象限名就按两维高低直写，不再另起「战略伙伴」这类名字 —— 看图的人不用再记一遍对照表。
  *
  * 几条硬约束：
  *  - 十字线位置来自后端下发的 threshold，不写死 —— 阈值是可配置项，
@@ -66,7 +71,7 @@ export function QuadrantChart({ data, threshold, onSelect, onCardClick, classNam
       const meta = QUADRANT_MAP[item.quadrant] ?? QUADRANT_MAP.incomplete;
       return {
         name: `${item.supplier_name} · ${item.pn}`,
-        value: [item.cap_score ?? 0, item.will_score ?? 0],
+        value: [item.will_score ?? 0, item.cap_score ?? 0],
         itemStyle: {
           color: item.quadrant === "incomplete" ? "transparent" : meta.color,
           borderColor: meta.color,
@@ -75,7 +80,7 @@ export function QuadrantChart({ data, threshold, onSelect, onCardClick, classNam
         },
         symbol: item.quadrant === "incomplete" ? "emptyCircle" : "circle",
         label: {
-          // 只给「观察退出」标名字：老板最该点名的就是这一格，全标会糊
+          // 只给「意愿低、能力弱」标名字：老板最该点名的就是这一格，全标会糊
           show: item.quadrant === "exit",
           formatter: item.supplier_name,
           position: "bottom" as const,
@@ -124,7 +129,7 @@ export function QuadrantChart({ data, threshold, onSelect, onCardClick, classNam
         type: "value",
         min: 0,
         max: 100,
-        name: "能力",
+        name: "Willingness",
         nameLocation: "end",
         nameGap: 16,
         nameTextStyle: { color: t.axis, fontSize: 12, padding: [0, 0, 0, 12] },
@@ -136,7 +141,7 @@ export function QuadrantChart({ data, threshold, onSelect, onCardClick, classNam
         type: "value",
         min: 0,
         max: 100,
-        name: "意愿",
+        name: "Capabilities",
         nameLocation: "end",
         nameGap: 14,
         nameRotate: 0,
@@ -190,50 +195,67 @@ export function QuadrantChart({ data, threshold, onSelect, onCardClick, classNam
           },
           markArea: {
             silent: true,
-            label: { show: true, position: "insideTopLeft", distance: 10, fontSize: 12, fontWeight: 500 },
+            // 象限名不在这里画：markArea 在 z=2，散点 z=5 会盖住字。
+            // 名字单独用一层 scatter 画在 z=9，永远压在点上面。
+            label: { show: false },
             data: [
+              // 左上：意愿低、能力强
               [
-                {
-                  name: QUADRANT_MAP.nurture.label,
-                  xAxis: 0,
-                  yAxis: threshold,
-                  itemStyle: { color: QUADRANT_MAP.nurture.soft },
-                  label: { color: QUADRANT_MAP.nurture.color, position: "insideTopLeft", distance: 10 },
-                },
+                { xAxis: 0, yAxis: threshold, itemStyle: { color: QUADRANT_MAP.dependent.soft } },
                 { xAxis: threshold, yAxis: 100 },
               ],
+              // 右上：意愿高、能力强
               [
-                {
-                  name: QUADRANT_MAP.partner.label,
-                  xAxis: threshold,
-                  yAxis: threshold,
-                  itemStyle: { color: QUADRANT_MAP.partner.soft },
-                  label: { color: QUADRANT_MAP.partner.color, position: "insideTopRight", distance: 10 },
-                },
+                { xAxis: threshold, yAxis: threshold, itemStyle: { color: QUADRANT_MAP.partner.soft } },
                 { xAxis: 100, yAxis: 100 },
               ],
+              // 左下：两维都低
               [
-                {
-                  name: QUADRANT_MAP.exit.label,
-                  xAxis: 0,
-                  yAxis: 0,
-                  itemStyle: { color: QUADRANT_MAP.exit.soft },
-                  label: { color: QUADRANT_MAP.exit.color, position: "insideLeft", distance: 10 },
-                },
+                { xAxis: 0, yAxis: 0, itemStyle: { color: QUADRANT_MAP.exit.soft } },
                 { xAxis: threshold, yAxis: threshold },
               ],
+              // 右下：意愿高、能力低
               [
-                {
-                  name: QUADRANT_MAP.dependent.label,
-                  xAxis: threshold,
-                  yAxis: 0,
-                  itemStyle: { color: QUADRANT_MAP.dependent.soft },
-                  label: { color: QUADRANT_MAP.dependent.color, position: "insideTopRight", distance: 10 },
-                },
+                { xAxis: threshold, yAxis: 0, itemStyle: { color: QUADRANT_MAP.nurture.soft } },
                 { xAxis: 100, yAxis: threshold },
               ],
             ],
           },
+        },
+        // 象限名：水平居中，贴各自色块的上沿内侧，单独一层画在散点之上
+        {
+          type: "scatter",
+          silent: true,
+          // zlevel 单独一层 canvas：只调 z 没用，散点仍会盖住字
+          zlevel: 2,
+          z: 10,
+          symbolSize: 0,
+          tooltip: { show: false },
+          data: (
+            [
+              // 上半区贴上沿 6px；下半区压到 22px —— 分数在 45~50 的点正好挤在
+              // 十字线下方，只压 10px 仍会被盖住，得让开一个点的直径。
+              [QUADRANT_MAP.dependent, threshold / 2, 100, 6],
+              [QUADRANT_MAP.partner, (threshold + 100) / 2, 100, 6],
+              [QUADRANT_MAP.exit, threshold / 2, threshold, 22],
+              [QUADRANT_MAP.nurture, (threshold + 100) / 2, threshold, 22],
+            ] as const
+          ).map(([meta, x, y, gap]) => ({
+            value: [x, y],
+            name: meta.label,
+            label: {
+              show: true,
+              formatter: meta.label,
+              position: "bottom" as const,
+              offset: [0, gap],
+              color: meta.color,
+              fontSize: 12,
+              fontWeight: 500 as const,
+              // 白描边当底色：点从字后面经过时仍然读得清
+              textBorderColor: "rgba(255,255,255,0.92)",
+              textBorderWidth: 3,
+            },
+          })),
         },
         { type: "scatter", data: basePoints, symbolSize: 11, z: 5, cursor: "pointer" },
         { type: "scatter", data: cardPoints, z: 8, cursor: "pointer", clip: false },

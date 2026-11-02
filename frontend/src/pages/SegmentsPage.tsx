@@ -1,6 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { CalendarRange, Copy, FileUp, Info, Inbox, Plus, Search, ShieldAlert, Trash2 } from "lucide-react";
+import {
+  CalendarRange,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  FileUp,
+  Info,
+  Inbox,
+  Plus,
+  Search,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -29,6 +41,7 @@ import {
 import { SiteHeader } from "@/components/site/SiteHeader";
 import { SiteSidebar } from "@/components/site/SiteSidebar";
 import { CardDialog } from "@/components/segments/CardDialog";
+import { CardListDialog } from "@/components/segments/CardListDialog";
 import { QuadrantChart } from "@/components/segments/QuadrantChart";
 import { QuadrantLegend } from "@/components/segments/QuadrantLegend";
 import { SegmentDrawer } from "@/components/segments/SegmentDrawer";
@@ -54,7 +67,7 @@ import {
 } from "@/types/segment";
 
 /**
- * 供应商细分（能力 × 意愿四象限）。
+ * 供应商细分（意愿 × 能力四象限）。
  *
  * 页面只有两块内容：**四象限图**（判断）和**明细表**（核对）。
  * 不做项目筛选 —— 评价单元是「期间 × 物料 × 供应商」，项目只决定
@@ -81,12 +94,31 @@ function monthOptions(periods: string[]): string[] {
   return Array.from(set).sort().reverse();
 }
 
+/** 明细表每页条数。数据按月，几十条量级，前端分页足够，不必走后端 offset */
+const PAGE_SIZE = 4;
+
+/** 页码序列：页数多时折叠成 1 … 4 5 6 … 12，避免页码铺满一行 */
+function pageItems(current: number, total: number): (number | "ellipsis")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const picked = [...new Set([1, total, current - 1, current, current + 1])]
+    .filter((n) => n >= 1 && n <= total)
+    .sort((a, b) => a - b);
+  const out: (number | "ellipsis")[] = [];
+  picked.forEach((n, i) => {
+    if (i > 0 && n - picked[i - 1] > 1) out.push("ellipsis");
+    out.push(n);
+  });
+  return out;
+}
+
 export default function SegmentsPage() {
   const [period, setPeriod] = useState("");
   const [segmentFilter, setSegmentFilter] = useState("");
   const [keyword, setKeyword] = useState("");
   const [quadrantFilter, setQuadrantFilter] = useState<Quadrant | null>(null);
   const [cardFilter, setCardFilter] = useState<CardColor | null>(null);
+  /** 点原点牌气泡弹出的清单（与表筛选分开：表在下半屏，点完看不见等于没反应） */
+  const [cardList, setCardList] = useState<CardColor | null>(null);
 
   /**
    * 当前打开的抽屉走 URL（?c=<id>）—— 老板把「某家供应商在左下角」这条
@@ -99,6 +131,8 @@ export default function SegmentsPage() {
   const [editTarget, setEditTarget] = useState<Segment | null>(null);
   const [cardOpen, setCardOpen] = useState(false);
   const [cardMode, setCardMode] = useState<"create" | "release">("create");
+  /** 从抽屉「标红牌 / 标黄牌」进来时预选的牌色 */
+  const [cardInit, setCardInit] = useState<CardColor>("red");
   const [deleteTarget, setDeleteTarget] = useState<Segment | null>(null);
 
   const { data: periods = [] } = useSegmentPeriods();
@@ -136,6 +170,29 @@ export default function SegmentsPage() {
     [rows, quadrantFilter, cardFilter]
   );
 
+  /** 图标题右侧的状态句：点了图例哪一格、筛出几条、怎么取消 */
+  const activeFilter = useMemo(() => {
+    if (quadrantFilter) {
+      const meta = QUADRANT_MAP[quadrantFilter] ?? QUADRANT_MAP.incomplete;
+      return { color: meta.color, text: `已筛：${meta.label} · ${tableRows.length} 条 · 再点一次取消` };
+    }
+    if (cardFilter) {
+      const meta = CARD_META[cardFilter];
+      return { color: meta.color, text: `已筛：${meta.label} · ${tableRows.length} 条 · 点「清除筛选」取消` };
+    }
+    return null;
+  }, [quadrantFilter, cardFilter, tableRows.length]);
+
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(tableRows.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = tableRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  /** 换月份、改筛选后回到第一页 —— 否则会停在上一批数据的第 3 页 */
+  useEffect(() => {
+    setPage(1);
+  }, [effectivePeriod, quadrantFilter, cardFilter, segmentFilter, keyword]);
+
   const activeCard = useMemo(
     () => cards.find((c) => c.supplier_id === selected?.supplier_id && c.active) ?? null,
     [cards, selected]
@@ -151,9 +208,10 @@ export default function SegmentsPage() {
     setFormOpen(true);
   }
 
-  function openCard(row: Segment, mode: "create" | "release") {
+  function openCard(row: Segment, mode: "create" | "release", color: CardColor = "red") {
     selectSegment(row);
     setCardMode(mode);
+    setCardInit(color);
     setCardOpen(true);
   }
 
@@ -185,8 +243,8 @@ export default function SegmentsPage() {
   const stat = summary;
   const statCards = [
     { label: "参评条目", value: stat?.total ?? 0, tone: "text-foreground" },
-    { label: "战略伙伴", value: stat?.by_quadrant?.partner ?? 0, tone: "text-emerald-600" },
-    { label: "观察退出", value: stat?.by_quadrant?.exit ?? 0, tone: "text-red-600" },
+    { label: "意愿高、能力强", value: stat?.by_quadrant?.partner ?? 0, tone: "text-emerald-600" },
+    { label: "意愿低、能力弱", value: stat?.by_quadrant?.exit ?? 0, tone: "text-red-600" },
     { label: "红牌供应商", value: stat?.red_card_count ?? 0, tone: "text-red-600" },
     { label: "未评级", value: stat?.incomplete ?? 0, tone: "text-muted-foreground" },
   ];
@@ -289,9 +347,12 @@ export default function SegmentsPage() {
               <Card>
                 <CardHeader className="pb-0">
                   <CardTitle className="flex items-center justify-between text-sm font-medium">
-                    <span>能力 × 意愿</span>
-                    <span className="text-xs font-normal text-muted-foreground">
-                      十字线 {threshold} · 共 {rows.length} 条
+                    <span>意愿 × 能力</span>
+                    <span
+                      className={cn("text-xs font-normal", activeFilter ? "" : "text-muted-foreground")}
+                      style={activeFilter ? { color: activeFilter.color } : undefined}
+                    >
+                      {activeFilter ? activeFilter.text : `十字线 ${threshold} · 共 ${rows.length} 条`}
                     </span>
                   </CardTitle>
                 </CardHeader>
@@ -321,7 +382,10 @@ export default function SegmentsPage() {
                         data={rows}
                         threshold={threshold}
                         onSelect={(row) => selectSegment(row)}
-                        onCardClick={(color) => setCardFilter(color)}
+                        onCardClick={(color) => {
+                          setCardFilter(color);
+                          setCardList(color);
+                        }}
                       />
                     </div>
                   )}
@@ -355,7 +419,7 @@ export default function SegmentsPage() {
                       className="flex w-full items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-left text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
                     >
                       <ShieldAlert className="h-3.5 w-3.5" />
-                      {stat.card_count} 家挂彩牌，其中红牌 {stat.red_card_count} 家
+                      {stat.card_count} 家挂红黄牌，其中红牌 {stat.red_card_count} 家
                     </button>
                   )}
                 </CardContent>
@@ -393,14 +457,14 @@ export default function SegmentsPage() {
                           <TableHead className="text-right">能力</TableHead>
                           <TableHead className="text-right">意愿</TableHead>
                           <TableHead>象限</TableHead>
-                          <TableHead>牌</TableHead>
+                          <TableHead>红黄牌</TableHead>
                           <TableHead className="text-right">完整度</TableHead>
                           <TableHead>打分人</TableHead>
                           <TableHead className="text-right">操作</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {tableRows.map((row) => {
+                        {pagedRows.map((row) => {
                           const meta = QUADRANT_MAP[row.quadrant] ?? QUADRANT_MAP.incomplete;
                           return (
                             <TableRow key={row.id} className="cursor-pointer" onClick={() => selectSegment(row)}>
@@ -469,6 +533,53 @@ export default function SegmentsPage() {
                     </Table>
                   </div>
                 )}
+
+                {tableRows.length > 0 && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+                    <span className="text-xs text-muted-foreground">
+                      共 {tableRows.length} 条 · 每页 {PAGE_SIZE} 条
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        disabled={safePage === 1}
+                        onClick={() => setPage(safePage - 1)}
+                        aria-label="上一页"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </Button>
+                      {pageItems(safePage, totalPages).map((item, i) =>
+                        item === "ellipsis" ? (
+                          <span key={`gap-${i}`} className="px-1 text-xs text-muted-foreground">
+                            …
+                          </span>
+                        ) : (
+                          <Button
+                            key={item}
+                            variant={item === safePage ? "default" : "ghost"}
+                            size="sm"
+                            className="h-7 min-w-7 px-2 text-xs tabular-nums"
+                            onClick={() => setPage(item)}
+                          >
+                            {item}
+                          </Button>
+                        )
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        disabled={safePage === totalPages}
+                        onClick={() => setPage(safePage + 1)}
+                        aria-label="下一页"
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -490,12 +601,23 @@ export default function SegmentsPage() {
         onImported={() => undefined}
       />
 
+      <CardListDialog
+        color={cardList}
+        rows={rows.filter((row) => row.card === cardList)}
+        onOpenChange={(open) => !open && setCardList(null)}
+        onPick={(row) => {
+          setCardList(null);
+          selectSegment(row);
+        }}
+      />
+
       <CardDialog
         open={cardOpen}
         onOpenChange={setCardOpen}
         mode={cardMode}
         segment={selected}
         activeCard={activeCard}
+        initialCard={cardInit}
         onSaved={() => undefined}
       />
 
@@ -509,7 +631,7 @@ export default function SegmentsPage() {
           setFormOpen(true);
         }}
         onDelete={(row) => setDeleteTarget(row)}
-        onCard={(row) => openCard(row, "create")}
+        onCard={(row, color) => openCard(row, "create", color)}
         onRelease={(row) => openCard(row, "release")}
       />
 

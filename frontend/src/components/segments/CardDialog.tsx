@@ -31,8 +31,10 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   mode: "create" | "release";
   segment: Segment | null;
-  /** 解牌时必须给：当前生效的那张牌 */
+  /** 解除时必须给：当前生效的那张牌 */
   activeCard: SupplierCard | null;
+  /** 从抽屉上「标红牌 / 标黄牌」进来时，预选那一色 */
+  initialCard?: CardColor;
   onSaved: () => void;
 }
 
@@ -41,11 +43,11 @@ function today(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSaved }: Props) {
+export function CardDialog({ open, onOpenChange, mode, segment, activeCard, initialCard = "red", onSaved }: Props) {
   const create = useCreateCard();
   const release = useReleaseCard();
 
-  const [card, setCard] = useState<CardColor>("red");
+  const [card, setCard] = useState<CardColor>(initialCard);
   const [reason, setReason] = useState("");
   const [effectiveFrom, setEffectiveFrom] = useState(today());
   const [createdBy, setCreatedBy] = useState("");
@@ -55,21 +57,21 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
 
   useEffect(() => {
     if (!open) return;
-    setCard("red");
+    setCard(initialCard);
     setReason("");
     setEffectiveFrom(today());
     setCreatedBy("");
     setReleaseReason("");
     setEffectiveTo(today());
     setReleasedBy("");
-  }, [open, mode]);
+  }, [open, mode, initialCard]);
 
   const submitting = create.isPending || release.isPending;
 
   async function handleCreate() {
     if (!segment) return;
     if (reason.trim().length < 5) {
-      toast.error("打牌原因至少 5 个字，写清是哪次事故");
+      toast.error("标注原因至少 5 个字，写清是哪次事故");
       return;
     }
     try {
@@ -84,14 +86,14 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
       onSaved();
       onOpenChange(false);
     } catch (error) {
-      toast.error(`打牌失败：${getApiErrorMessage(error)}`);
+      toast.error(`标红黄牌失败：${getApiErrorMessage(error)}`);
     }
   }
 
   async function handleRelease() {
     if (!activeCard) return;
     if (releaseReason.trim().length < 2) {
-      toast.error("解牌原因必填");
+      toast.error("解除原因必填");
       return;
     }
     try {
@@ -103,11 +105,11 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
           released_by: releasedBy || undefined,
         },
       });
-      toast.success("已解牌，分数按原档位恢复");
+      toast.success(`已解除${activeCard ? CARD_META[activeCard.card].label : "红黄牌"}，分数按原档位恢复`);
       onSaved();
       onOpenChange(false);
     } catch (error) {
-      toast.error(`解牌失败：${getApiErrorMessage(error)}`);
+      toast.error(`解除失败：${getApiErrorMessage(error)}`);
     }
   }
 
@@ -115,11 +117,13 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{mode === "create" ? "打牌" : "解牌"}</DialogTitle>
+          <DialogTitle>
+            {mode === "create" ? `标${CARD_META[card].label}` : `解除${activeCard ? CARD_META[activeCard.card].label : "红黄牌"}`}
+          </DialogTitle>
           <DialogDescription>
             {segment ? `${segment.supplier_name}（${segment.supplier_code}）` : ""}
             {mode === "create"
-              ? " · 牌期间该供应商所有物料的能力与意愿均记 0 分，档位原值保留。"
+              ? " · 红黄牌生效期间该供应商所有物料的能力与意愿均记 0 分，档位原值保留。"
               : " · 解除后按原档位重算；区间内的历史月份仍保留 0 分。"}
           </DialogDescription>
         </DialogHeader>
@@ -127,7 +131,7 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
         {mode === "create" ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label>牌色</Label>
+              <Label>标哪种</Label>
               <div className="flex gap-2">
                 {(["red", "yellow"] as CardColor[]).map((color) => (
                   <button
@@ -149,7 +153,7 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="card-reason">打牌原因</Label>
+              <Label htmlFor="card-reason">标注原因</Label>
               <Textarea
                 id="card-reason"
                 value={reason}
@@ -165,13 +169,13 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
                 <Input id="card-from" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="card-by">打牌人</Label>
+                <Label htmlFor="card-by">操作人</Label>
                 <Input id="card-by" value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder="选填" />
               </div>
             </div>
 
             <p className="text-[11px] leading-4 text-muted-foreground">
-              同一供应商同时只有一张生效牌。已有牌时再打，旧牌在生效日前一天终止（改判，不是叠加）。
+              同一供应商同时只能挂一张红黄牌。已有牌时再标，旧牌在生效日前一天终止（改判，不是叠加）。
             </p>
           </div>
         ) : (
@@ -185,7 +189,7 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="release-reason">解牌原因</Label>
+              <Label htmlFor="release-reason">解除原因</Label>
               <Textarea
                 id="release-reason"
                 value={releaseReason}
@@ -200,7 +204,7 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
                 <Input id="release-to" type="date" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="release-by">解牌人</Label>
+                <Label htmlFor="release-by">解除人</Label>
                 <Input id="release-by" value={releasedBy} onChange={(e) => setReleasedBy(e.target.value)} placeholder="选填" />
               </div>
             </div>
@@ -213,7 +217,7 @@ export function CardDialog({ open, onOpenChange, mode, segment, activeCard, onSa
           </Button>
           <Button onClick={mode === "create" ? handleCreate : handleRelease} disabled={submitting}>
             {submitting && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-            {mode === "create" ? "确认打牌" : "确认解牌"}
+            {mode === "create" ? `确认标${CARD_META[card].label}` : "确认解除"}
           </Button>
         </DialogFooter>
       </DialogContent>

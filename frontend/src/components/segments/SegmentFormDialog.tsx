@@ -244,7 +244,7 @@ export function SegmentFormDialog({ open, onOpenChange, segment, defaultPeriod, 
 
           <div className="space-y-3">
             <div>
-              <p className="mb-2 text-xs font-medium text-muted-foreground">能力 6 项（横轴）</p>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">能力 6 项（纵轴）</p>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {CAP_DIMS.map((dim) => (
                   <div key={dim.key} className="space-y-1">
@@ -267,7 +267,7 @@ export function SegmentFormDialog({ open, onOpenChange, segment, defaultPeriod, 
             </div>
 
             <div>
-              <p className="mb-2 text-xs font-medium text-muted-foreground">意愿 6 项（纵轴）</p>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">意愿 6 项（横轴）</p>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {WILL_DIMS.map((dim) => (
                   <div key={dim.key} className="space-y-1">

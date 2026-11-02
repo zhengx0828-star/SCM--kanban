@@ -27,11 +27,21 @@ export function QuadrantLegend({ byQuadrant, total, className, onPick, activeQua
             key={item.key}
             type="button"
             onClick={() => onPick?.(item.key)}
+            // 选中态以前只有「边框深一点」，白卡上等于看不见 —— 现在用该象限的色
+            // 做左边条 + 浅底 + 已筛标签，三处一起变，才看得出选中了哪一格。
+            style={active ? { borderColor: `${item.color}80`, backgroundColor: item.soft } : undefined}
             className={cn(
-              "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left transition-colors",
-              active ? "border-foreground/30 bg-muted/60" : "hover:bg-muted/40"
+              "relative flex w-full items-start gap-2.5 overflow-hidden rounded-md border px-3 py-2 text-left transition-colors",
+              active ? "" : "hover:bg-muted/40"
             )}
           >
+            {active && (
+              <span
+                aria-hidden
+                className="absolute inset-y-0 left-0 w-[3px]"
+                style={{ backgroundColor: item.color }}
+              />
+            )}
             <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline justify-between gap-2">
@@ -40,13 +50,23 @@ export function QuadrantLegend({ byQuadrant, total, className, onPick, activeQua
                   {count} 条 · {pct}%
                 </span>
               </span>
-              <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">{item.action}</span>
+              <span className="mt-0.5 flex items-center justify-between gap-2 text-[11px] leading-4 text-muted-foreground">
+                <span className="truncate">{item.action}</span>
+                {active && (
+                  <span
+                    className="shrink-0 rounded-full px-1.5 text-[10px] font-medium leading-4"
+                    style={{ backgroundColor: `${item.color}1f`, color: item.color }}
+                  >
+                    已筛
+                  </span>
+                )}
+              </span>
             </span>
           </button>
         );
       })}
       <p className="px-1 pt-1 text-[11px] leading-4 text-muted-foreground">
-        牌生效期间能力与意愿一律记 0 分，点沉在原点；牌解除后按原档位自动恢复。
+        红黄牌生效期间能力与意愿一律记 0 分，点沉在原点；解除后按原档位自动恢复。
       </p>
     </div>
   );
