@@ -1,9 +1,15 @@
-"""生成份额导入模板（长表：一行 = 供应商 × 段 × 基地）。
+"""生成份额导入模板（宽表：基地展开成列，与你现有的表完全同构）。
 
-为什么是长表：宽表把基地写进列名（基地A_份额 / 基地A_线数），
-同一项目分模组段与电芯段时，两段的基地集合不同 → 只能拆成两块表头上下堆叠，
-而导入只解析第一行表头，第二块会被当数据行 → 整批 422。
-长表把「段」「基地」降级为数据列，列数固定，段/基地随便加都不用改模板。
+固定列（每块表头都要写全）：
+    物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C
+基地列（每块自己一套，必须成对）：
+    <基地>份额 | <基地>条数 | <基地>份额 | <基地>条数 …
+
+一个 sheet 可以有多块表头上下堆叠，块与块之间留空行即可；块间基地可以不同
+（第一块基地 A/B，第二块基地 C/D）。列按名字识别，不看第几列，列顺序随意。
+
+项目与月份：模板不写死。默认取导入弹窗里选的项目 + 月份；
+要一份文件导多个项目，把 sheet 改名成 `ABC-2026-11`，或在表里加「项目代码」「月份」两列。
 
 用法：
     python scripts/make_share_template.py
@@ -21,102 +27,120 @@ from openpyxl.worksheet.datavalidation import DataValidation
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "frontend" / "public" / "templates" / "share-import-template.xlsx"
 
-HEADERS = [
-    "物料PN",
-    "物料名称",
-    "供应商代码",
-    "供应商名称",
-    "段",
-    "基地",
-    "拉线数",
-    "基地份额",
-    "本月份额",
-    "Q",
-    "D",
-    "C",
-]
-WIDTHS = [12, 14, 13, 14, 10, 12, 9, 11, 11, 7, 7, 7]
+FIXED = ["物料PN", "物料名称", "供应商名称", "供应商代码", "本月份额", "Q", "D", "C"]
+FIXED_W = [12, 12, 13, 13, 11, 7, 7, 7]
+BASE_W = 9
 
-# 示例：模组段用库内真实物料（123 侧板 / 1341 KL / 1245 XS），可直接试导；
-# 电芯段为格式示范（456 电芯尚未建物料，导入前需先建主数据或删掉这几行）。
-SAMPLES = [
-    ("123", "侧板", "1341", "KL", "模组", "基地A", 2, 50, None, 0.7, 1, 1),
-    ("123", "侧板", "1341", "KL", "模组", "基地B", 5, 80, None, 0.7, 1, 1),
-    ("123", "侧板", "1245", "XS", "模组", "基地A", 2, 50, None, 1, 1, 0.7),
-    ("123", "侧板", "1245", "XS", "模组", "基地B", 5, 20, None, 1, 1, 0.7),
-    ("456", "电芯", "1341", "KL", "电芯", "基地C", 3, 40, None, 0.7, 1, 1),
-    ("456", "电芯", "1341", "KL", "电芯", "基地D", 4, 60, None, 0.7, 1, 1),
-    ("456", "电芯", "1245", "XS", "电芯", "基地C", 3, 60, None, 1, 1, 0.7),
-    ("456", "电芯", "1245", "XS", "电芯", "基地D", 4, 40, None, 1, 1, 0.7),
+# 每块的基地组合 + 示例行。示例用库内真实物料，可直接试导。
+# 条数（= 这个基地有几条产线）是基地属性：同一基地每一行填同一个数。
+BLOCKS = [
+    {
+        "bases": ["A", "B"],
+        "rows": [
+            ("123", "侧板", "KL", "1341", None, 0.7, 1, 1, 50, 2, 80, 5),
+            ("123", "侧板", "XS", "1245", None, 1, 1, 0.7, 50, 2, 20, 5),
+        ],
+    },
+    {
+        "bases": ["C", "D"],
+        "rows": [
+            ("456", "电芯", "KL", "1341", None, 0.7, 1, 1, 40, 3, 60, 4),
+            ("456", "电芯", "XS", "1245", None, 1, 1, 0.7, 60, 3, 40, 4),
+        ],
+    },
 ]
 
 NOTES = [
     ("填写规则", ""),
-    ("1", "一行 = 一个「供应商 × 段 × 基地」。同一供应商在多个基地就写多行，不要合并单元格。"),
-    ("2", "「段」由物料决定：一个物料 PN 只能属于一个段（模组 / 电芯）。首次导入会自动建档到物料主档，后续必须保持一致。"),
-    ("3", "同一段内，每个基地的各供应商「基地份额」合计必须 = 100%（容差 ±1%，99% 可接受）。"),
-    ("4", "「拉线数」≥ 1，必须与「基地份额」成对填写；某供应商不供该基地可写 0 份额，或直接不写这一行。"),
-    ("5", "「本月份额」可留空 → 按 Σ(基地份额 × 拉线数) ÷ Σ拉线数 自动计算。"),
-    ("6", "「基地份额」可写 0-100（50 表示 50%）或 0-1（0.5 表示 50%），整批统一一种口径，不能混。"),
-    ("7", "Q / D / C 只允许五档：1 / 0.7 / 0.5 / 0.3 / 0。"),
-    ("8", "项目与月份在导入弹窗里选择，不写在表格里；供应商代码必须是主数据里的真实代码，不按名称匹配。"),
-    ("9", "示例行（456 电芯）仅示范分段写法：该物料未建主数据时导入会报「未找到供应关系」，请先建物料与供应关系，或删除示例行。"),
-    ("10", "旧的宽表模板（基地A_份额 / 基地A_线数 成对两列）仍然兼容，但一个项目只能有一张表头，无法同时表达两段的不同基地。"),
+    ("1", "一个 sheet 可以有多块表头，上下堆叠，中间留空行即可。每块表头把固定列写全，再跟上这一块的基地列。"),
+    ("2", "基地写在列名里：<基地>份额 + <基地>条数，必须成对出现，缺一个整批报错。"),
+    ("3", "加一个基地 = 加两列（份额 + 条数），再把表头行复制一遍改列名。同一块里不要混两套基地。"),
+    ("4", "「条数」= 这个基地有几条产线，属于基地不属于供应商：同一基地的每一行填同一个数；也可以只在第一家填，其余留空自动沿用。同一基地填了两个不同的数会整批报错。"),
+    ("5", "每个基地内部，各供应商的「基地份额」合计 = 100%（容差 ±1%，99% 可接受）。不同基地互不相干。"),
+    ("6", "「本月份额」可以留空 → 按 Σ(基地份额 × 条数) ÷ Σ该物料全部基地的条数 自动算，缺席基地按 0 计，留空一定合计 100%。填了就以填的为准。"),
+    ("7", "「基地份额」「本月份额」可写 0-100（50 表示 50%）或 0-1（0.5 表示 50%），整批统一一种口径，不能混用。"),
+    ("8", "Q / D / C 只允许五档：1 / 0.7 / 0.5 / 0.3 / 0。"),
+    ("9", "段由物料决定，模板里不写：首次导入没有段信息时按物料主档，主档也没有就留空待补，后续在物料管理里改。一个物料只能属于一个段。"),
+    ("10", "物料 PN / 供应商代码在主数据里没有时，按行内的物料名称、供应商名称自动建档并挂到该项目（已存在的只复用、不改名）。"),
+    ("11", "一份文件默认 = 弹窗里选的项目 + 月份。要一次导多个项目：把 sheet 改名成 ABC-2026-11（项目代码或项目名 + 年月），或在表里加「项目代码」「月份」两列。"),
+    ("12", "示例行会随导入一起建档（123 侧板 / 456 电芯）。只想导自己的数据，导入前删掉示例行。"),
 ]
 
 HEAD_FILL = PatternFill("solid", fgColor="1E3A8A")
+BASE_FILL = PatternFill("solid", fgColor="0F766E")
 HEAD_FONT = Font(color="FFFFFF", bold=True, size=11)
 SAMPLE_FONT = Font(color="6B7280", size=10)
 THIN = Side(style="thin", color="D1D5DB")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 
+def block_header(bases: list[str]) -> tuple[list[str], list[int]]:
+    """固定列 + 每基地一对「X份额 / X条数」。"""
+    head = list(FIXED)
+    widths = list(FIXED_W)
+    for b in bases:
+        head += [f"{b}份额", f"{b}条数"]
+        widths += [BASE_W, BASE_W]
+    return head, widths
+
+
 def build() -> Path:
     wb = Workbook()
     ws = wb.active
+    # sheet 名不带项目：识别不到就用弹窗里选的项目与月份。
+    # 想一次导多个项目 → 把这个 sheet 复制一份，名字改成「ABC-2026-11」。
     ws.title = "份额导入"
 
-    # 表头
-    for col, (name, width) in enumerate(zip(HEADERS, WIDTHS), start=1):
-        cell = ws.cell(row=1, column=col, value=name)
-        cell.fill = HEAD_FILL
-        cell.font = HEAD_FONT
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = BORDER
-        ws.column_dimensions[get_column_letter(col)].width = width
-    ws.row_dimensions[1].height = 24
+    n_base_cols = len(FIXED)
+    row = 1
+    base_col_start = n_base_cols + 1
+    for idx, blk in enumerate(BLOCKS):
+        head, widths = block_header(blk["bases"])
+        if idx == 0:
+            for col, (name, width) in enumerate(zip(head, widths), start=1):
+                ws.column_dimensions[get_column_letter(col)].width = width
+
+        for col, name in enumerate(head, start=1):
+            cell = ws.cell(row=row, column=col, value=name)
+            cell.fill = BASE_FILL if col >= base_col_start else HEAD_FILL
+            cell.font = HEAD_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = BORDER
+        ws.row_dimensions[row].height = 24
+        row += 1
+
+        for sample in blk["rows"]:
+            for col, value in enumerate(sample, start=1):
+                cell = ws.cell(row=row, column=col, value=value)
+                cell.font = SAMPLE_FONT
+                cell.border = BORDER
+                if col >= 5:
+                    cell.alignment = Alignment(horizontal="center")
+                    cell.number_format = "0.##"
+            row += 1
+
+        row += 1  # 块间空行
+
     ws.freeze_panes = "A2"
 
-    # 示例数据
-    for r, row in enumerate(SAMPLES, start=2):
-        for col, value in enumerate(row, start=1):
-            cell = ws.cell(row=r, column=col, value=value)
-            cell.font = SAMPLE_FONT
-            cell.border = BORDER
-            if col in (7, 8, 9):
-                cell.number_format = "0.##"
-                cell.alignment = Alignment(horizontal="center")
-            elif col in (10, 11, 12):
-                cell.alignment = Alignment(horizontal="center")
-
     last = 500
-    dv_seg = DataValidation(type="list", formula1='"模组,电芯"', allow_blank=True, showDropDown=False)
-    dv_seg.error = "段由物料决定，只能填模组或电芯（新增段请先在物料主档维护）"
-    dv_seg.errorTitle = "段不合法"
-    ws.add_data_validation(dv_seg)
-    dv_seg.add(f"E2:E{last}")
-
+    # Q / D / C 在固定列里固定为第 6/7/8 列
     dv_qdc = DataValidation(type="list", formula1='"1,0.7,0.5,0.3,0"', allow_blank=True, showDropDown=False)
     dv_qdc.error = "Q / D / C 只允许 1 / 0.7 / 0.5 / 0.3 / 0"
     dv_qdc.errorTitle = "评分不合法"
     ws.add_data_validation(dv_qdc)
-    dv_qdc.add(f"J2:L{last}")
+    dv_qdc.add(f"F2:H{last}")
 
-    dv_lines = DataValidation(type="whole", operator="between", formula1="1", formula2="999", allow_blank=True)
-    dv_lines.error = "拉线数必须是 1-999 的整数"
-    dv_lines.errorTitle = "拉线数不合法"
-    ws.add_data_validation(dv_lines)
-    dv_lines.add(f"G2:G{last}")
+    # 条数列在基地列对里，逐个基地加整数校验
+    for blk in BLOCKS:
+        for i in range(len(blk["bases"])):
+            col = base_col_start + i * 2 + 1  # 份额 + 1 = 条数
+            letter = get_column_letter(col)
+            dv = DataValidation(type="whole", operator="between", formula1="1", formula2="999", allow_blank=True)
+            dv.error = "条数必须是 1-999 的整数（这个基地有几条产线）"
+            dv.errorTitle = "条数不合法"
+            ws.add_data_validation(dv)
+            dv.add(f"{letter}2:{letter}{last}")
 
     # 说明页
     ws2 = wb.create_sheet("填写说明")
