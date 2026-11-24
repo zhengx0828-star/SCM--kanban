@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
-from ..models import InventoryPlan, Supplier, SupplyRelation
+from ..models import InventoryPlan, Supplier, SupplierCard, SupplierSegment, SupplyRelation
 from ..schemas import SupplierCreate, SupplierRead, SupplierUpdate
 from ..supplier_risk import assess_supplier_risk
 
@@ -96,6 +96,24 @@ def delete_supplier(supplier_id: int, db: Session = Depends(get_db)) -> None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"供应商「{supplier.name}」仍有 {rels} 条供应关系，请先解除供应关系",
+        )
+    # 评价档位与红黄牌都挂在 supplier_id 上且外键 CASCADE，删供应商会一并抹掉。
+    # 红黄牌的设计前提是「牌期两维归零但不覆盖原档位，解牌可恢复」——被删就恢复不了。
+    segments = db.execute(
+        select(func.count()).select_from(SupplierSegment).where(SupplierSegment.supplier_id == supplier_id)
+    ).scalar_one()
+    if segments:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"供应商「{supplier.name}」仍有 {segments} 条细分评价，请先在细分页删除这些评价",
+        )
+    cards = db.execute(
+        select(func.count()).select_from(SupplierCard).where(SupplierCard.supplier_id == supplier_id)
+    ).scalar_one()
+    if cards:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"供应商「{supplier.name}」仍有 {cards} 条红黄牌记录，请先解除后再删除",
         )
     db.delete(supplier)
     db.commit()

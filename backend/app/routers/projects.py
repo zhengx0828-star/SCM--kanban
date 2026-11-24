@@ -35,6 +35,8 @@ from ..models import (
     ProjectSupplyRelation,
     ShareRecord,
     Supplier,
+    SupplierCard,
+    SupplierSegment,
     SupplyRelation,
 )
 from ..schemas import (
@@ -235,7 +237,25 @@ def _demand_version_create(
         )
         ver.is_current = True
 
-    db.commit()
+    db.flush()
+
+    # 项目首版强制为当前版，否则不允许出现「有版本但没有当前版」的项目
+    if set_current or not versions:
+        db.execute(
+            update(ProjectDemandVersion)
+            .where(
+                ProjectDemandVersion.project_id == project_id,
+                ProjectDemandVersion.is_current.is_(True),
+                ProjectDemandVersion.id != ver.id,
+            )
+            .values(is_current=False)
+        )
+        ver.is_current = True
+
+    # ★ 这里只 flush 不 commit：版本行与投影必须同生共死。
+    #   以前先 commit 版本、再在 _write_demand_projection 里二次 commit，中途失败会留下
+    #   「下拉显示 V2、预警与库存按 V1 算」的永久不一致，且没有任何写入会修复它。
+    db.flush()
     db.refresh(ver)
 
     if ver.is_current:
@@ -248,13 +268,15 @@ def _write_demand_projection(db: Session, project_id: int, demand_json: str | No
 
     版本表是唯一真相源，这里只是让既有消费方（供需首页聚合、物料弹窗、库存信号塔
     按 BOM 折算、Excel 导入、需求折线）无需改动即可继续读到「当前版」。
+
+    ★ 只 flush，不 commit —— 由调用方在版本行与投影都写完后统一提交一次。
     """
     db.execute(
         update(ProjectSupplyRelation)
         .where(ProjectSupplyRelation.project_id == project_id)
         .values(demand=demand_json)
     )
-    db.commit()
+    db.flush()
 
 
 def _ensure_current_version(db: Session, project_id: int) -> None:
@@ -274,6 +296,8 @@ def _ensure_current_version(db: Session, project_id: int) -> None:
     ).scalars().first()
     if fallback is not None:
         fallback.is_current = True
+        # 置位与投影同步，避免「有当前版但投影还是空」的历史数据继续误导下游
+        _write_demand_projection(db, project_id, fallback.demand)
         db.commit()
 
 
@@ -435,6 +459,14 @@ def _purge_orphan_master_data(db: Session, relation_ids: set[int]) -> None:
         ).scalar_one()
         if change_count:
             continue
+        # ★ 供应商细分评价（12 项档位 + 历史快照）挂在 material_id 上，外键是 CASCADE。
+        #   这套数据的口径是「档位原值不覆盖、解牌后可恢复」，被一个删项目动作连带清掉
+        #   就再也算不回来。宁可留下一条孤儿主数据，也不静默销毁评价历史。
+        segment_count = db.execute(
+            select(func.count()).select_from(SupplierSegment).where(SupplierSegment.material_id == material_id)
+        ).scalar_one()
+        if segment_count:
+            continue
         material = db.get(Material, material_id)
         if material is not None:
             db.delete(material)
@@ -450,6 +482,17 @@ def _purge_orphan_master_data(db: Session, relation_ids: set[int]) -> None:
             select(func.count()).select_from(InventoryPlan).where(InventoryPlan.supplier_id == supplier_id)
         ).scalar_one()
         if plan_count:
+            continue
+        # ★ 同物料：评价档位与红黄牌都是 CASCADE，删供应商会一并抹掉，不可恢复
+        segment_count = db.execute(
+            select(func.count()).select_from(SupplierSegment).where(SupplierSegment.supplier_id == supplier_id)
+        ).scalar_one()
+        if segment_count:
+            continue
+        card_count = db.execute(
+            select(func.count()).select_from(SupplierCard).where(SupplierCard.supplier_id == supplier_id)
+        ).scalar_one()
+        if card_count:
             continue
         supplier = db.get(Supplier, supplier_id)
         if supplier is not None:
@@ -721,6 +764,8 @@ def update_project_demand(
         note=None,
         set_current=True,
     )
+    # 版本行与投影已在同一事务内写完，这里统一提交一次
+    db.commit()
 
     stmt = select(ProjectSupplyRelation).options(*_LINK_LOAD).where(
         ProjectSupplyRelation.project_id == project_id,
@@ -830,6 +875,9 @@ def create_demand_version(
         note=payload.note,
         set_current=payload.set_current,
     )
+    # 版本行与投影已在同一事务内写完，这里统一提交一次
+    db.commit()
+    db.refresh(ver)
     return _version_to_read(ver)
 
 
@@ -864,11 +912,12 @@ def set_current_demand_version(
         .values(is_current=False)
     )
     ver.is_current = True
+    # 切换当前版 = 切换全站口径：置位与投影回写必须同一事务，最后统一提交
+    db.flush()
+
+    _write_demand_projection(db, project_id, ver.demand)
     db.commit()
     db.refresh(ver)
-
-    # 切换当前版 = 切换全站口径，同步把投影回写
-    _write_demand_projection(db, project_id, ver.demand)
     return _version_to_read(ver)
 
 

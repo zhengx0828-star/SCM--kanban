@@ -12,7 +12,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Change, InventoryPlan, Material, SupplyRelation
+from ..models import Change, InventoryPlan, Material, SupplierSegment, SupplyRelation
 from ..schemas import MaterialCreate, MaterialList, MaterialRead, MaterialUpdate
 
 router = APIRouter(prefix="/api/materials", tags=["Materials"])
@@ -141,6 +141,16 @@ def delete_material(material_id: int, db: Session = Depends(get_db)) -> None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"物料「{material.pn}」仍被 {changes} 张变更单引用，请先处理这些变更单",
+        )
+    # 供应商细分评价挂在 material_id 上且外键 CASCADE，删物料会连带抹掉 12 项档位与
+    # 历史快照。这套数据不可重建，按「有引用就 409」的统一口径拦下。
+    segments = db.execute(
+        select(func.count()).select_from(SupplierSegment).where(SupplierSegment.material_id == material_id)
+    ).scalar_one()
+    if segments:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"物料「{material.pn}」仍有 {segments} 条供应商细分评价，请先在细分页删除这些评价",
         )
     db.delete(material)
     db.commit()

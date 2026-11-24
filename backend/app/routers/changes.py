@@ -1384,6 +1384,18 @@ async def import_changes(
                     row_to_task[excel_row_no] = exists.id
                     result.updated_tasks += 1
 
+    # ★ 原子性门禁：解析阶段只 flush 不 commit，任何一行出错就整批回滚。
+    #   以前这里直接往下 flush + commit，用户会拿到 200 但只导入了前几行；
+    #   更糟的是缺任务的那张单叶子全完成，_refresh_change_summary 会把它刷成「已完成」，
+    #   等于用半截数据得出一个错误的业务结论。
+    if result.errors:
+        db.rollback()
+        more = f"（共 {len(result.errors)} 条错误，仅显示前 20 条）" if len(result.errors) > 20 else ""
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="导入失败，未写入任何数据：" + "；".join(result.errors[:20]) + more,
+        )
+
     db.flush()
     for change_id in {v for v in excel_to_change.values()}:
         chg = db.get(Change, change_id)
