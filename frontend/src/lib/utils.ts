@@ -31,8 +31,16 @@ export function getApiErrorMessage(error: unknown): string {
         .filter(Boolean)
         .join("；");
     }
-    if (typeof detail === "string") return detail;
-    return error.message;
+    if (typeof detail === "string" && detail.trim()) return detail;
+    // 没有 detail 时不要回 axios 的英文原文（Request failed with status code 500），
+    // 内网用户看不懂，而且英文会让人以为系统坏了却无从下手。
+    if (!error.response) return "连不上服务，请确认后端已启动";
+    const status = error.response.status;
+    if (status === 404) return "数据不存在或已被删除";
+    if (status === 401 || status === 403) return "没有访问权限";
+    if (status === 422) return "参数不合法，请检查填写内容";
+    if (status >= 500) return "服务异常，请稍后重试（详见后端控制台）";
+    return `请求失败（HTTP ${status}）`;
   }
   return error instanceof Error ? error.message : "请求失败，请稍后重试";
 }

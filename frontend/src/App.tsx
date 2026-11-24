@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import ChangesPage from "./pages/ChangesPage";
 import DashboardPage from "./pages/DashboardPage";
 import InventoryPage from "./pages/InventoryPage";
@@ -10,11 +10,17 @@ import SharePage from "./pages/SharePage";
 import ShareRecordsPage from "./pages/ShareRecordsPage";
 import SupplyDemandPage from "./pages/SupplyDemandPage";
 import SupplierMasterPage from "./pages/SupplierMasterPage";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 
-export default function App() {
+/**
+ * 每个路由各包一层错误边界：一页渲染崩了不影响其他页，
+ * key 用 pathname 保证切页时自动复位（否则报错后跳到别的页仍然是错误页）。
+ */
+function RoutedApp() {
+  const location = useLocation();
   return (
-    <>
+    <ErrorBoundary key={location.pathname} label={location.pathname}>
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
@@ -32,6 +38,14 @@ export default function App() {
         <Route path="/projects" element={<Navigate to="/materials" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+    </ErrorBoundary>
+  );
+}
+
+export default function App() {
+  return (
+    <>
+      <RoutedApp />
       <Toaster richColors position="top-right" />
     </>
   );

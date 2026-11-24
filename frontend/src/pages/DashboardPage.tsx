@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryError } from "@/components/ui/query-error";
 import { ChinaMap } from "@/components/charts/ChinaMap";
 import { ProjectRiskMatrix } from "@/components/dashboard/ProjectRiskMatrix";
 import { SiteHeader } from "@/components/site/SiteHeader";
@@ -56,6 +57,12 @@ interface StatItem {
   /** 副标语气：有超期 → 红、只有临期 → 黄、其余灰 */
   hintTone?: "danger" | "warn";
   onClick?: () => void;
+  /**
+   * 数据源失败。
+   * ★ 失败时卡片必须显示「—」而不是 0：一块把「接口挂了」画成「业务是 0」的看板，
+   *   会让老板拿着错数字做决定，比直接报错危险得多。
+   */
+  failed?: boolean;
 }
 
 const TONE_CLASS = {
@@ -120,19 +127,50 @@ function buildChangesStat(summary: ChangeSummary | undefined, goChanges: () => v
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const { data: suppliers = [], isLoading } = useSuppliers();
+  const {
+    data: suppliers = [],
+    isLoading,
+    isError: suppliersError,
+    error: suppliersErr,
+    refetch: refetchSuppliers,
+  } = useSuppliers();
   // 与「供应商列表」页共用同一接口与缓存失效键，联动刷新：
   // 项目总数 = 项目列表 total；物料总数 = 物料列表 total（物料表 PN 唯一，即不同 PN 的种数）
-  const { data: projectList, isLoading: projectLoading } = useProjects({ page: 1, page_size: 1 });
-  const { data: materialList, isLoading: materialLoading } = useMaterials({ page: 1, page_size: 1 });
+  const {
+    data: projectList,
+    isLoading: projectLoading,
+    isError: projectError,
+  } = useProjects({ page: 1, page_size: 1 });
+  const {
+    data: materialList,
+    isLoading: materialLoading,
+    isError: materialError,
+  } = useMaterials({ page: 1, page_size: 1 });
   // 卡片 2/3：份额波动 / 重点物料独供（跨项目、最新月，与份额管理同源）
-  const { data: shareStats, isLoading: shareStatsLoading } = useShareDashboardStats();
+  const {
+    data: shareStats,
+    isLoading: shareStatsLoading,
+    isError: shareStatsError,
+  } = useShareDashboardStats();
   // 卡片 4：库存概览（与库存页同源，实时口径）
-  const { data: projectOverview, isLoading: overviewLoading } = useInventoryProjectOverview();
+  const {
+    data: projectOverview,
+    isLoading: overviewLoading,
+    isError: overviewError,
+  } = useInventoryProjectOverview();
   // 卡片 5：变更统计（与变更页页头同源）
-  const { data: changeSummary, isLoading: changeSummaryLoading } = useChangeSummary();
+  const {
+    data: changeSummary,
+    isLoading: changeSummaryLoading,
+    isError: changeSummaryError,
+  } = useChangeSummary();
   // ② 风险热点矩阵（唯一预警来源）
-  const { data: alerts } = useAlerts();
+  const {
+    data: alerts,
+    isError: alertsError,
+    error: alertsErr,
+    refetch: refetchAlerts,
+  } = useAlerts();
 
   const [formOpen, setFormOpen] = useState(false);
   const [selected, setSelected] = useState<Supplier | null>(null);
@@ -166,20 +204,31 @@ export default function DashboardPage() {
   /* ---- 地图项目切片器 ---- */
   const { data: sliceProjectList } = useProjects({ page: 1, page_size: 100 });
   const [sliceProjectId, setSliceProjectId] = useState<string>(SLICE_ALL);
-  const { data: projectSuppliers = [], isLoading: projectSuppliersLoading } = useProjectSuppliers(
-    sliceProjectId === SLICE_ALL ? null : Number(sliceProjectId)
-  );
+  const {
+    data: projectSuppliers = [],
+    isLoading: projectSuppliersLoading,
+    isError: projectSuppliersError,
+    error: projectSuppliersErr,
+    refetch: refetchProjectSuppliers,
+  } = useProjectSuppliers(sliceProjectId === SLICE_ALL ? null : Number(sliceProjectId));
 
   const mapSuppliers = sliceProjectId === SLICE_ALL ? suppliers : projectSuppliers;
   const mapLoading = sliceProjectId === SLICE_ALL ? isLoading : projectSuppliersLoading;
+  const mapError = sliceProjectId === SLICE_ALL ? suppliersError : projectSuppliersError;
+  const mapErr = sliceProjectId === SLICE_ALL ? suppliersErr : projectSuppliersErr;
+  const refetchMap = sliceProjectId === SLICE_ALL ? refetchSuppliers : refetchProjectSuppliers;
 
   const sliceProject = useMemo(
     () => (sliceProjectId === SLICE_ALL ? undefined : sliceProjectList?.items.find((p) => String(p.id) === sliceProjectId)),
     [sliceProjectId, sliceProjectList]
   );
-  const sliceLabel = sliceProject
-    ? `${sliceProject.code} · ${sliceProject.name}（${mapSuppliers.length} 家供应商）`
-    : `全部供应商（${mapSuppliers.length}）`;
+  const sliceLabel = mapError
+    ? sliceProject
+      ? `${sliceProject.code} · ${sliceProject.name}`
+      : "全部供应商"
+    : sliceProject
+      ? `${sliceProject.code} · ${sliceProject.name}（${mapSuppliers.length} 家供应商）`
+      : `全部供应商（${mapSuppliers.length}）`;
 
   /** 当前地图展示供应商的风险等级（含未评估）分布 */
   const riskCounts = useMemo(() => {
@@ -250,6 +299,7 @@ export default function DashboardPage() {
         icon: FolderKanban,
         chip: "bg-primary/10 text-primary",
         bar: "bg-primary",
+        failed: projectError || materialError,
       },
       {
         label: "份额波动物料",
@@ -260,6 +310,7 @@ export default function DashboardPage() {
         bar: "bg-emerald-500",
         onClick: () =>
           navigate(shareStats?.month ? `/share?risk=fluctuation&month=${shareStats.month}` : "/share"),
+        failed: shareStatsError,
       },
       {
         label: "重点物料独供数量",
@@ -270,18 +321,24 @@ export default function DashboardPage() {
         bar: "bg-red-500",
         onClick: () =>
           navigate(shareStats?.month ? `/share?risk=sole&month=${shareStats.month}` : "/share"),
+        failed: shareStatsError,
       },
-      buildUrgentInventoryStat(urgentUnits, urgentProjectIds, goInventory),
-      buildChangesStat(changeSummary, goChanges),
+      { ...buildUrgentInventoryStat(urgentUnits, urgentProjectIds, goInventory), failed: overviewError },
+      { ...buildChangesStat(changeSummary, goChanges), failed: changeSummaryError },
     ],
     [
       projectList?.total,
       materialList?.total,
+      projectError,
+      materialError,
       shareStats,
+      shareStatsError,
       urgentUnits,
       urgentProjectIds,
       goInventory,
+      overviewError,
       changeSummary,
+      changeSummaryError,
       goChanges,
       navigate,
     ]
@@ -333,10 +390,26 @@ export default function DashboardPage() {
                     {statsLoading ? (
                       <Skeleton className="h-7 w-24" />
                     ) : (
-                      <p className="text-2xl font-semibold tracking-tight tabular-nums">{stat.value}</p>
+                      <p
+                        className={cn(
+                          "text-2xl font-semibold tracking-tight tabular-nums",
+                          stat.failed && "text-muted-foreground"
+                        )}
+                      >
+                        {stat.failed ? "—" : stat.value}
+                      </p>
                     )}
-                    <p className={cn("text-xs", stat.hintTone ? TONE_CLASS[stat.hintTone] : "text-muted-foreground")}>
-                      {stat.hint}
+                    <p
+                      className={cn(
+                        "text-xs",
+                        stat.failed
+                          ? TONE_CLASS.danger
+                          : stat.hintTone
+                            ? TONE_CLASS[stat.hintTone]
+                            : "text-muted-foreground"
+                      )}
+                    >
+                      {stat.failed ? "接口异常，数字不可用" : stat.hint}
                     </p>
                   </CardContent>
                 </Card>
@@ -345,7 +418,16 @@ export default function DashboardPage() {
 
             {/* ② 项目风险热点矩阵（点格直接进板块） */}
             <div className="mt-4">
-              <ProjectRiskMatrix rows={alerts?.by_project ?? []} baseMonth={alerts?.base_month ?? ""} />
+              {alertsError ? (
+                <QueryError
+                  label="风险分布"
+                  error={alertsErr}
+                  onRetry={() => void refetchAlerts()}
+                  className="py-8"
+                />
+              ) : (
+                <ProjectRiskMatrix rows={alerts?.by_project ?? []} baseMonth={alerts?.base_month ?? ""} />
+              )}
             </div>
 
             {/* ③ 全国供应商分布地图（原位置下移：与风险无关，是「我们在哪」） */}
@@ -375,7 +457,7 @@ export default function DashboardPage() {
                       </Select>
                       {mapLoading ? (
                         <Skeleton className="h-6 w-28" />
-                      ) : (
+                      ) : mapError ? null : (
                         <div className="flex items-center gap-2">
                           {RISK_ORDER.map((risk) => (
                             <Badge key={risk} variant="outline" className="gap-1 px-2 py-0.5 text-xs font-normal">
@@ -429,6 +511,16 @@ export default function DashboardPage() {
                       onSupplierClick={(s) => setSelected(s)}
                       onMapPick={handleMapPick}
                     />
+                    {mapError && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-background/80 px-6">
+                        <QueryError
+                          label="供应商分布"
+                          error={mapErr}
+                          onRetry={() => void refetchMap()}
+                          className="w-full max-w-md"
+                        />
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
