@@ -88,7 +88,6 @@ export function ProjectFormDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{editing ? "编辑项目" : "新增项目"}</DialogTitle>
-          <DialogDescription>项目是 L3 维度的一等公民，每个项目维护自己的供应明细信息。</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">

@@ -71,8 +71,7 @@ export function SupplyRelationFormDialog({
         <DialogHeader>
           <DialogTitle>新增供应关系</DialogTitle>
           <DialogDescription>
-            选择物料 + 供应商建立全局唯一的四元组（物料PN · 物料名称 · 供应商名称 · 供应商代码），
-            不含项目信息；之后在「项目」页挂载到具体项目。
+            四元组不含项目信息，之后在「项目」页挂载到具体项目。
           </DialogDescription>
         </DialogHeader>
 

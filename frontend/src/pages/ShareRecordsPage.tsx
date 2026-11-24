@@ -208,10 +208,6 @@ export default function ShareRecordsPage() {
                   返回份额概览
                 </button>
                 <h1 className="text-2xl font-semibold tracking-tight">份额明细</h1>
-                <p className="mt-2 max-w-3xl text-muted-foreground">
-                  项目 {activeProject ? `「${activeProject.name}」` : ""} 的 {month} 份额：供应商固定，直接在表格里改份额和 QDC；
-                  月末结转可一键翻月，供应商不变。
-                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <select

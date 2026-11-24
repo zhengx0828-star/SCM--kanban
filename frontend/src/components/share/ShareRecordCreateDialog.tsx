@@ -243,8 +243,7 @@ export function ShareRecordCreateDialog({ open, onOpenChange, projectId, month }
         <DialogHeader>
           <DialogTitle>手动录入份额（{month}）</DialogTitle>
           <DialogDescription>
-            逐基地录入：基地名 + 拉线数量 + 该供应商在该基地的份额（%）。多基地时填多行，
-            本月系统份额 = Σ(份额 × 拉线) ÷ Σ拉线，实时预览、保存后自动计算。
+            逐基地录入：基地名 + 拉线数 + 该供应商在该基地的份额（%）；系统份额 = Σ(份额 × 拉线) ÷ Σ拉线。
           </DialogDescription>
         </DialogHeader>
 

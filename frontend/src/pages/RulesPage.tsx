@@ -95,7 +95,7 @@ function RuleFormDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{editing ? "编辑规则" : "新增规则"}</DialogTitle>
-          <DialogDescription>补充系统内置说明之外的内容：内部约定、踩过的坑、特殊口径。</DialogDescription>
+          <DialogDescription>内部约定、踩过的坑、特殊口径。</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-3 gap-3">
@@ -121,7 +121,7 @@ function RuleFormDialog({
             <Textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              placeholder="支持换行，可写多段说明…"
+              placeholder="一句话写清规则，如：导入前先删模板示例行"
               rows={6}
             />
           </div>
@@ -229,7 +229,7 @@ function TeamRules() {
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
             {keyword || moduleFilter !== "__all__"
               ? "未找到匹配的规则"
-              : "还没有补充说明。系统内置的 SOP 和指标口径不在这里，点上方标签切换。"}
+              : "还没有补充说明。内置 SOP 与指标口径在另两个标签页。"}
           </CardContent>
         </Card>
       ) : (
@@ -338,9 +338,6 @@ export default function RulesPage() {
           <div className="mx-auto max-w-[1180px]">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">规则与口径</h1>
-              <p className="mt-1.5 text-[13.5px] text-muted-foreground">
-                按模块列操作步骤，按指标列计算公式。
-              </p>
             </div>
 
             {/* 标签页 */}

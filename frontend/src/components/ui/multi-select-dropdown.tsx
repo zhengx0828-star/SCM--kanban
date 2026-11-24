@@ -29,6 +29,8 @@ export interface DropdownOption {
   /** 副标签（如 PN），以 mono 字体展示 */
   sublabel?: string;
   color?: string;
+  /** 仅色点用色（不改复选框/选中底色）；不传则跟随 color */
+  dotColor?: string;
   /** 右侧小徽标（如"未设 BOM"） */
   badge?: React.ReactNode;
   disabled?: boolean;
@@ -237,8 +239,11 @@ export function MultiSelectDropdown({
                     ) : (
                       <Check className={cn("h-4 w-4 shrink-0", checked ? "opacity-100" : "opacity-0")} />
                     )}
-                    {o.color && (
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: o.color }} />
+                    {(o.dotColor ?? o.color) && (
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: o.dotColor ?? o.color }}
+                      />
                     )}
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{o.label}</span>

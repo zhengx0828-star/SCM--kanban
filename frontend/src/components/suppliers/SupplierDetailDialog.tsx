@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle,
   BadgeCheck,
   Boxes,
   Building2,
   Loader2,
   Mail,
   MapPin,
+  MapPinOff,
   Package,
   Pencil,
   Phone,
   Save,
+  ShieldAlert,
   StickyNote,
-  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -38,9 +38,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { useDeleteSupplier, useUpdateSupplier } from "@/hooks/use-suppliers";
+import { useUpdateSupplier } from "@/hooks/use-suppliers";
 import { getApiErrorMessage } from "@/lib/utils";
-import { RISK_META, riskKeyOf, type Supplier } from "@/types/supplier";
+import { RISK_META, supplierRiskOf, type Supplier } from "@/types/supplier";
 
 interface SupplierDetailDialogProps {
   /** 当前查看的供应商，null 时关闭 */
@@ -52,11 +52,16 @@ interface SupplierDetailDialogProps {
  * - 默认只读，点击底部「编辑」进入编辑模式可改：联系人 / 联系电话 / 供应物料 / 备注
  * - 「关联物料」一栏同时显示 PN 与物料名称（PN · 名称）
  * - 字段缺失值统一用「未填写」占位
+ *
+ * ★ 撤点位 ≠ 删供应商：地图点位只是主数据上的城市 + 经纬度。用户要的是「这个点别显示了」，
+ *   所以这里只提供「撤掉地图点位」（PATCH 经纬度为 null），**不提供删除供应商**，
+ *   避免把 supplier 删掉后 supply_relations 外键 CASCADE 连带清空项目供应关系。
+ *   删除供应商请到「供应商列表」，那里会明确标注关系一并移除。
  */
 export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialogProps) {
-  const deleteMutation = useDeleteSupplier();
   const updateMutation = useUpdateSupplier();
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  // 撤点位二次确认（不是删除，仅清空经纬度）
+  const [mapRemoveOpen, setMapRemoveOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,6 +71,7 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
     setCurrent(supplier);
     setEditing(false);
     setError(null);
+    setMapRemoveOpen(false);
   }, [supplier]);
 
   // 编辑态表单
@@ -82,17 +88,22 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
     setRemark(current.remark ?? "");
   }, [editing, current]);
 
-  const handleDelete = () => {
-    if (!supplier) return;
+  /** 撤掉地图点位：只清空经纬度，供应商主数据与供应关系原样保留 */
+  const handleRemoveFromMap = () => {
+    if (!current) return;
     setError(null);
-    deleteMutation.mutate(supplier.id, {
-      onSuccess: () => {
-        toast.success("供应商已删除，地图点位已移除");
-        setConfirmOpen(false);
-        onClose();
-      },
-      onError: (err) => setError(getApiErrorMessage(err)),
-    });
+    updateMutation.mutate(
+      { id: current.id, data: { longitude: null, latitude: null } },
+      {
+        onSuccess: (updated) => {
+          setCurrent(updated);
+          setMapRemoveOpen(false);
+          onClose(); // 关掉弹窗，让用户直接看到点位已从地图消失
+          toast.success("已撤掉地图点位，供应商与供应关系均保留");
+        },
+        onError: (err) => setError(getApiErrorMessage(err)),
+      }
+    );
   };
 
   const handleSave = () => {
@@ -119,6 +130,9 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
     );
   };
 
+  /** 是否有坐标（决定能否撤点位；无坐标本就不上图） */
+  const hasCoords = current?.longitude != null && current?.latitude != null;
+
   return (
     <>
       <Dialog open={supplier !== null} onOpenChange={(open) => !open && onClose()}>
@@ -129,7 +143,7 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
                 <div className="flex items-center gap-2 pr-8">
                   <DialogTitle className="flex-1 break-all">{current.name}</DialogTitle>
                   {(() => {
-                    const key = riskKeyOf(current.risk_level);
+                    const key = supplierRiskOf(current);
                     const meta = RISK_META[key];
                     return (
                       <Badge
@@ -149,11 +163,39 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
                     );
                   })()}
                 </div>
-                <DialogDescription>{RISK_META[riskKeyOf(current.risk_level)].desc}</DialogDescription>
+                <DialogDescription>{RISK_META[supplierRiskOf(current)].desc}</DialogDescription>
               </DialogHeader>
 
               {/* 单列纵向布局：每个信息块占一行、标题统一、缺失值用「未填写」灰字占位 */}
               <div className="space-y-3.5 text-sm">
+                {/* 红黄绿判定依据：点开就知道为什么是这个颜色 */}
+                <Field
+                  icon={<ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+                  label="风险判定依据"
+                >
+                  {(current.risk?.reasons?.length ?? 0) > 0 ? (
+                    <ul className="mt-1.5 space-y-1">
+                      {current.risk!.reasons.map((r) => (
+                        <li key={r.code} className="flex items-start gap-1.5 text-xs">
+                          <span
+                            className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: RISK_META[supplierRiskOf(current)].color }}
+                          />
+                          <span className="min-w-0">
+                            <span className="font-medium">{r.label}</span>
+                            <span className="mx-1 text-muted-foreground">·</span>
+                            <span className="text-muted-foreground">{r.detail}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      红黄情形一条都不命中。没录份额 / 库存档案的也算绿，绿色只代表「没有已知问题」。
+                    </p>
+                  )}
+                </Field>
+
                 {/* 省份 + 经纬度 */}
                 <Field icon={<MapPin className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}>
                   <p className="font-medium">{current.city ?? "省份未设置"}</p>
@@ -252,9 +294,14 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
                 </Field>
 
                 {error && <p className="text-xs text-red-500">{error}</p>}
+
+                {/* 撤点位的口径说明：避免和「删除供应商」混为一谈 */}
+                <p className="text-xs text-muted-foreground">
+                  撤点位只清空经纬度，供应商主数据与供应关系不动。删除供应商请到「供应商列表」。
+                </p>
               </div>
 
-              {/* 底部操作栏：编辑模式显示保存/取消；只读模式显示编辑/删除 */}
+              {/* 底部操作栏：编辑模式显示保存/取消；只读模式显示撤点位/编辑 */}
               <div className="mt-4 flex items-center justify-between border-t pt-4">
                 {editing ? (
                   <>
@@ -273,15 +320,19 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
                   </>
                 ) : (
                   <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-red-600 hover:text-red-600"
-                      onClick={() => setConfirmOpen(true)}
-                    >
-                      <Trash2 className="mr-1.5 h-4 w-4" />
-                      删除该供应商
-                    </Button>
+                    {hasCoords ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setMapRemoveOpen(true)}
+                        disabled={updateMutation.isPending}
+                      >
+                        <MapPinOff className="mr-1.5 h-4 w-4" />
+                        撤掉地图点位
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">未设置坐标，不上图</span>
+                    )}
                     <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                       <Pencil className="mr-1.5 h-4 w-4" />
                       编辑
@@ -294,30 +345,30 @@ export function SupplierDetailDialog({ supplier, onClose }: SupplierDetailDialog
         </DialogContent>
       </Dialog>
 
-      {/* 删除二次确认 */}
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      {/* 撤点位二次确认（不是删除：只清空经纬度） */}
+      <AlertDialog open={mapRemoveOpen} onOpenChange={setMapRemoveOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-red-500" />
-              确认删除该供应商？
+              <MapPinOff className="h-4 w-4 text-muted-foreground" />
+              撤掉这个地图点位？
             </AlertDialogTitle>
             <AlertDialogDescription>
-              「{supplier?.name}」将从地图中移除，此操作不可撤销。
+              仅清空「{current?.name}」的经纬度，地图上不再显示该点位；供应商主数据与
+              {current?.materials?.length ?? 0} 条供应关系全部保留。需要重新上图时，在「录入供应商」里补坐标即可。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteMutation.isPending}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={updateMutation.isPending}>取消</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-red-600 text-white hover:bg-red-700"
-              disabled={deleteMutation.isPending}
+              disabled={updateMutation.isPending}
               onClick={(e) => {
                 e.preventDefault();
-                handleDelete();
+                handleRemoveFromMap();
               }}
             >
-              {deleteMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              确认删除
+              {updateMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              确认撤点
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

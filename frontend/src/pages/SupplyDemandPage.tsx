@@ -248,9 +248,6 @@ export default function SupplyDemandPage() {
           <div className="mx-auto max-w-6xl">
             <section>
               <h1 className="text-2xl font-semibold tracking-tight">供需管理</h1>
-              <p className="mt-2 text-muted-foreground">
-                一眼看风险：哪些物料会缺、什么时候开始缺；下方可展开明细逐项排查。
-              </p>
             </section>
 
             {/* 1) 风险总览（老板首屏 · 全部项目 · 零交互） */}
@@ -283,9 +280,6 @@ export default function SupplyDemandPage() {
                     />
                   ))}
                 </div>
-                <p className="mt-2.5 px-1 text-xs text-muted-foreground">
-                  点击卡片进入项目详情（录入客户需求 / BOM / 产能）。
-                </p>
               </>
             )}
 
@@ -424,7 +418,7 @@ export default function SupplyDemandPage() {
             )}
 
             <p className="mt-6 text-center text-xs text-muted-foreground">
-              数据均与各业务模块实时同源；供应系数 = 产能 ÷ 需求，&lt; 1 缺口、1.0-1.3 紧张、&gt; 1.3 充足，需求为 0 显示灰色。
+              供应系数 = 产能 ÷ 需求：&lt; 1 缺口、1.0–1.3 紧张、&gt; 1.3 充足；需求为 0 显示灰色。
             </p>
           </div>
         </main>
@@ -489,9 +483,6 @@ function RiskOverview({ summary, loading }: { summary: SupplyRiskSummary; loadin
           tone={summary.firstShortageMonth == null ? "ok" : "warn"}
         />
       </div>
-      <p className="mt-2.5 px-1 text-xs text-muted-foreground">
-        口径：全部项目；供应系数 = 产能 ÷ 需求，&lt; 1 为缺口。明细分析在页面下方，按项目 / 物料筛选后查看。
-      </p>
     </div>
   );
 }

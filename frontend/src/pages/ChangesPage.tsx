@@ -707,10 +707,11 @@ export default function ChangesPage() {
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">变更管理</h1>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          承诺兑现追踪 · 进度按时间自动推算，勾选是人给的答案，两者之差即偏差
-          {hasProject && (projectMeta || projectRow) && ` · 当前：${projectMeta?.name ?? projectRow?.project_name}`}
-        </p>
+        {hasProject && (projectMeta || projectRow) && (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            当前：{projectMeta?.name ?? projectRow?.project_name}
+          </p>
+        )}
       </div>
       {toolbar}
     </div>

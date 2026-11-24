@@ -98,7 +98,6 @@ function MaterialFormDialog({ open, onOpenChange }: { open: boolean; onOpenChang
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>新增物料</DialogTitle>
-          <DialogDescription>物料先建（PN + 名称），随后可为其添加供应商。</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
@@ -850,10 +849,6 @@ export default function SupplierMasterPage() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h1 className="text-2xl font-semibold tracking-tight">供应商列表</h1>
-                <p className="mt-2 max-w-2xl text-muted-foreground">
-                  先有项目，再有物料（PN + 名称），再为物料添加供应商（名称 + 代码），
-                  形成四元组供其他模块调用。
-                </p>
               </div>
               <div className="flex items-center gap-2">{headerAction}</div>
             </div>
@@ -1163,7 +1158,6 @@ export default function SupplierMasterPage() {
                         <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
                           <UserPlus className="h-8 w-8 text-muted-foreground/40" />
                           <p className="text-sm font-medium text-muted-foreground">请选择左侧供应商</p>
-                          <p className="text-xs text-muted-foreground/70">查看该供应商供应的所有物料（PN）</p>
                         </div>
                       ) : (
                         <>

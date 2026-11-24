@@ -21,7 +21,7 @@ import { useProjects, useProjectSuppliers } from "@/hooks/use-projects";
 import { useShareDashboardStats } from "@/hooks/use-share";
 import { useSuppliers } from "@/hooks/use-suppliers";
 import { cn } from "@/lib/utils";
-import { RISK_META, RISK_ORDER, riskKeyOf, type Supplier, type SupplierRiskKey } from "@/types/supplier";
+import { RISK_META, RISK_ORDER, supplierRiskOf, type Supplier, type SupplierRiskKey } from "@/types/supplier";
 import type { ChangeSummary } from "@/types/change";
 
 /**
@@ -184,7 +184,7 @@ export default function DashboardPage() {
   /** 当前地图展示供应商的风险等级（含未评估）分布 */
   const riskCounts = useMemo(() => {
     const counts: Record<SupplierRiskKey, number> = { red: 0, yellow: 0, green: 0, none: 0 };
-    for (const s of mapSuppliers) counts[riskKeyOf(s.risk_level)] += 1;
+    for (const s of mapSuppliers) counts[supplierRiskOf(s)] += 1;
     return counts;
   }, [mapSuppliers]);
 
@@ -302,16 +302,13 @@ export default function DashboardPage() {
             {/* 页头 */}
             <section id="overview" className="scroll-mt-20">
               <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-              <p className="mt-2 text-muted-foreground">
-                供应链整体态势总览：关键指标、风险分布与供应商分布。
-                {alerts?.base_month && (
-                  <span className="ml-1 text-muted-foreground/80">
-                    · 份额基准月 {alerts.base_month}
-                    {alerts.horizon.length > 0 &&
-                      ` · 供需窗口 ${alerts.horizon[0]} ~ ${alerts.horizon[alerts.horizon.length - 1]}`}
-                  </span>
-                )}
-              </p>
+              {alerts?.base_month && (
+                <p className="mt-2 text-muted-foreground">
+                  份额基准月 {alerts.base_month}
+                  {alerts.horizon.length > 0 &&
+                    ` · 供需窗口 ${alerts.horizon[0]} ~ ${alerts.horizon[alerts.horizon.length - 1]}`}
+                </p>
+              )}
             </section>
 
             {/* ① 顶部统计卡：五张全部为实时联动数据，口径与各板块同源 */}
@@ -359,7 +356,7 @@ export default function DashboardPage() {
                     <div className="min-w-0">
                       <h3 className="text-sm font-medium">全国供应商分布</h3>
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {sliceLabel} · 点击点位查看详情 · 红黄蓝按风险等级着色（灰=未评估）
+                        {sliceLabel} · 悬浮看是哪几家 · 点省份看全部名单 · 红黄绿自动判定
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -438,7 +435,7 @@ export default function DashboardPage() {
             </div>
 
             <p className="mt-6 text-center text-xs text-muted-foreground">
-              顶部指标与各业务板块同源；风险矩阵由预警聚合接口实时计算。地图仅展示已录入的供应商点位。
+              地图仅展示已录入经纬度的供应商。
             </p>
           </div>
         </main>

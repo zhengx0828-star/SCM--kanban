@@ -4,10 +4,14 @@ export type SupplierRiskLevel = "red" | "yellow" | "green";
 /** 未评估的风险等级占位（后端返回 null，前端归一为 "none"） */
 export type SupplierRiskKey = SupplierRiskLevel | "none";
 
-/** 风险等级展示元信息（红=高 / 黄=中 / 绿=正常 / 灰=未评估）
+/** 风险等级展示元信息（红=高 / 黄=中 / 绿=正常 / 灰=未判定）
  *
- * 注意：红黄绿判定规则未定，录入供应商时**不带颜色**；颜色由规则确定后的对应模块联动填充。
- * 未评估（none）显示灰色，不冒充红黄绿。
+ * ★ 地图颜色读的是接口里的 `risk.level`（后端实时判定，见 `backend/app/supplier_risk.py`），
+ *   不是表里的 `risk_level`（人工标红，只允许加红）。
+ *   口径（2026-11-03 用户确认）：
+ *     红 = 凡影响交付：红牌 / 黄牌 / 已断货 / 库存跌破 / 供需缺口 / 人工标红
+ *     黄 = 不影响交付：有进行中的变更 / 唯一货源（独供但当前有货）
+ *     绿 = 其余（含没有台账的 —— 用户明确「只要在地图上的就是绿的」）
  */
 export const RISK_META: Record<
   SupplierRiskKey,
@@ -17,25 +21,25 @@ export const RISK_META: Record<
     label: "高风险",
     color: "#ef4444",
     dot: "bg-red-500",
-    desc: "重点物料独供 / 存在断供风险",
+    desc: "红牌或黄牌生效、已断货、库存跌破安全线、供需缺口、人工标红，命中任一",
   },
   yellow: {
     label: "中风险",
     color: "#f59e0b",
     dot: "bg-amber-500",
-    desc: "备选有限，需关注",
+    desc: "有进行中的变更、唯一货源（仅此一家供应），命中任一",
   },
   green: {
     label: "正常",
     color: "#22c55e",
     dot: "bg-green-500",
-    desc: "正常供应，多源竞争",
+    desc: "以上红黄情形一条都不命中（含未录份额/库存台账的）",
   },
   none: {
-    label: "未评估",
+    label: "未判定",
     color: "#94a3b8",
     dot: "bg-slate-400",
-    desc: "风险判定规则未定，暂无颜色",
+    desc: "接口未返回判定结果",
   },
 };
 
@@ -65,10 +69,32 @@ export interface SupplierMaterial {
   category: string | null;
 }
 
+/** 一条红黄绿判定依据（后端已按规则聚合，detail 带数字） */
+export interface SupplierRiskReason {
+  code:
+    | "card_red"
+    | "stockout"
+    | "shortage"
+    | "card_yellow"
+    | "change"
+    | "sole_low_stock"
+    | "manual_red"
+    | string;
+  label: string;
+  detail: string;
+}
+
+/** 供应商级红黄绿（实时算，不落库） */
+export interface SupplierRisk {
+  level: SupplierRiskLevel;
+  reasons: SupplierRiskReason[];
+  stats: Record<string, number>;
+}
+
 /** 供应商实体（与后端 SupplierRead 对应）
  *
- * 供应商主数据层承载身份信息（代码/名称/地图点位/联系人）与 risk_level。
- * risk_level：NULL = 未评估（地图显示灰色）；红黄绿判定规则未定，规则确定后由对应模块联动填充。
+ * 供应商主数据层承载身份信息（代码/名称/地图点位/联系人）。
+ * `risk` 是接口实时下发的判定结果；`risk_level` 是库里的人工标记（只允许加红）。
  */
 export interface Supplier {
   id: number;
@@ -81,12 +107,19 @@ export interface Supplier {
   contact_person: string | null;
   phone: string | null;
   supply_material: string | null;
-  /** 风险等级（地图点位颜色）：null = 未评估；录入时不要求提供 */
+  /** 人工风险标记（库字段）：只用于「加红」，不参与降级 */
   risk_level: SupplierRiskLevel | null;
+  /** 实时红黄绿（地图/统计的唯一颜色来源） */
+  risk?: SupplierRisk;
   remark: string | null;
   materials: SupplierMaterial[];
   created_at: string;
   updated_at: string;
+}
+
+/** 供应商颜色取值：优先实时判定，缺失才回落人工值/未判定 */
+export function supplierRiskOf(s: Pick<Supplier, "risk" | "risk_level">): SupplierRiskKey {
+  return riskKeyOf(s.risk?.level ?? s.risk_level);
 }
 
 /** 新增供应商请求体（底表录入只需 code/name；risk_level 不要求提供，默认未评估） */

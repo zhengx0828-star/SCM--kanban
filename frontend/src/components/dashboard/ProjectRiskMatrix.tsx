@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { ArrowUpRight } from "lucide-react";
 import { buildProjectDimLink } from "@/lib/alert-link";
 import { cn } from "@/lib/utils";
 import {
@@ -122,9 +121,6 @@ export function ProjectRiskMatrix({ rows, baseMonth }: Props) {
 
       <p className="border-t px-5 py-2 text-[11px] text-muted-foreground">
         灰格「—」= 该项目该维度无预警信号，<span className="font-medium">不等于健康</span>（可能是数据没录）。
-        <span className="ml-1 inline-flex items-center gap-0.5">
-          点格子进入板块 <ArrowUpRight className="inline h-3 w-3" />
-        </span>
       </p>
     </div>
   );

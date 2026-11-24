@@ -37,6 +37,13 @@ export interface PlacedPoint {
   risk: MapRiskKey;
 }
 
+/** 聚合气泡内的单个成员（tooltip 要列出是哪几家） */
+export interface ClusterMember {
+  supplierId: number;
+  name: string;
+  risk: MapRiskKey;
+}
+
 /** 聚合计数气泡 */
 export interface ClusterPoint {
   lng: number;
@@ -44,6 +51,8 @@ export interface ClusterPoint {
   count: number;
   city: string;
   risk: MapRiskKey;
+  /** 组内成员，按风险从重到轻排序（红在前），tooltip 直接用 */
+  members: ClusterMember[];
 }
 
 /** 同坐标超过该家数 → 聚合成计数气泡（避免圆环挤成一团） */
@@ -105,12 +114,20 @@ export function computeSupplierPlacements(suppliers: MapPointSupplier[]): {
     // 家数过多：聚合成计数气泡
     if (arr.length > OVERLAP_RING_MAX) {
       const head = arr[0];
+      // 成员按风险从重到轻排（同风险按 id 升序），tooltip 列表红家在最上面
+      const members = [...arr]
+        .sort((a, b) => {
+          const d = RISK_RANK[riskKeyOf(b.risk_level)] - RISK_RANK[riskKeyOf(a.risk_level)];
+          return d !== 0 ? d : a.id - b.id;
+        })
+        .map((s) => ({ supplierId: s.id, name: s.name, risk: riskKeyOf(s.risk_level) }));
       clusters.push({
         lng: head.longitude as number,
         lat: head.latitude as number,
         count: arr.length,
         city: head.city ?? "-",
         risk: pickSevereRisk(arr),
+        members,
       });
       continue;
     }

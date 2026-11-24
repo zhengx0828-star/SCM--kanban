@@ -209,6 +209,20 @@ export function useUnlinkProjectRelation(projectId: number | null) {
   });
 }
 
+/** 从项目移除物料（管理物料 · 批量）：删该项目下该 PN 的全部明细，主数据保留 */
+export function useRemoveProjectMaterials(projectId: number | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (pns: string[]) => projectApi.removeMaterials(projectId!, { pns }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: projectKeys.all });
+      queryClient.invalidateQueries({ queryKey: projectKeys.relations(projectId ?? -1) });
+      queryClient.invalidateQueries({ queryKey: ["supply-relations"] });
+      queryClient.invalidateQueries({ queryKey: ["alerts"] });
+    },
+  });
+}
+
 /** 快速录入项目明细（四元组一行式，自动建主数据并挂载） */
 export function useQuickAddProjectRelation(projectId: number | null) {
   const queryClient = useQueryClient();

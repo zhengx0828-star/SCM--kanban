@@ -157,9 +157,6 @@ export default function SharePage() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h1 className="text-2xl font-semibold tracking-tight">份额管理</h1>
-                <p className="mt-2 max-w-3xl text-muted-foreground">
-                  按项目、按月快照各物料 × 供应商的份额与 QDC 评分，自动计算建议配额并识别独供 / 波动 / 偏差风险。
-                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Select value={month} onValueChange={setMonth}>

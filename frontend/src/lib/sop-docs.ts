@@ -125,7 +125,7 @@ export const SOP_MODULES: SopModule[] = [
     shot: "/sop/supply-demand.png",
     steps: [
       { no: 1, flowLabel: "看四卡", text: "先看顶部四卡", tip: "缺口物料数 / 最严重缺口月 / 全年覆盖率 / 首个缺口月" },
-      { no: 2, flowLabel: "选项目", text: "右上「项目」下拉选范围", tip: "可多选，也可以点「全选」看全部" },
+      { no: 2, flowLabel: "选项目", text: "右上「项目」下拉选范围", tip: "点「全选」看全部" },
       { no: 3, flowLabel: "进项目", text: "点项目卡片进详情", tip: "录入客户需求、BOM、产能都在详情里" },
       { no: 4, flowLabel: "读柱线", text: "看下方两张明细卡", tip: "柱 = 产能，线 = 需求；系数 = 产能 ÷ 需求" },
     ],

@@ -261,7 +261,7 @@ export default function SegmentsPage() {
               <div>
                 <h1 className="text-2xl font-semibold tracking-tight">供应商细分</h1>
                 <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-                  按重点物料给供应商打 12 项档位，合成能力与意愿两维，落四象限。象限只用来看「该加份额还是该找替代」，评价本身不带项目。
+                  评价按供应商 × 物料，不带项目。
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">

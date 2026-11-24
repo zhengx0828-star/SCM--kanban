@@ -117,12 +117,32 @@ export interface ShareQuadrantPoint {
   project_id: number;
 }
 
+/** 导入结果按（项目 × 月份）拆开的一份：一份文件可跨项目、跨月份 */
+export interface ShareImportProjectItem {
+  project_id: number;
+  project_code: string;
+  project_name: string;
+  month: string;
+  imported: number;
+  updated: number;
+  skipped: number;
+  created_materials: number;
+  created_suppliers: number;
+  created_links: number;
+}
+
 /** Excel 导入结果 */
 export interface ShareImportResult {
   imported: number;
   updated: number;
   skipped: number;
   errors: string[];
+  /** 文件里出现主档没有的 PN / 供应商代码时，按文件名称自动建档并挂到当前项目的数量 */
+  created_materials: number;
+  created_suppliers: number;
+  created_links: number;
+  /** 跨项目导入时的分组明细 */
+  by_project: ShareImportProjectItem[];
 }
 
 /** 份额首页项目卡片标注：单项目波动/独供「预警条数」（记录级、与 KPI/风险排行同口径；按最新数据月统计） */

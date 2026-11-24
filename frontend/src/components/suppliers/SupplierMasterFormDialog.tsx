@@ -65,9 +65,7 @@ export function SupplierMasterFormDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>录入供应商</DialogTitle>
-          <DialogDescription>
-            录入供应商主数据（底表）。仅需名称与代码；地图相关字段（城市、经纬度等）在「Dashboard 录入」中补全。
-          </DialogDescription>
+          <DialogDescription>地图字段（城市、经纬度）在「Dashboard 录入」中补全。</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">

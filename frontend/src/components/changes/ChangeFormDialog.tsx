@@ -97,7 +97,7 @@ export function ChangeFormDialog({ open, onOpenChange, presetProjectId, onCreate
         <DialogContent className="max-w-[560px]">
           <DialogHeader>
             <DialogTitle>新建变更单</DialogTitle>
-            <DialogDescription>一张单只对应一个物料；建好后进去加待办项和计划时间。</DialogDescription>
+            <DialogDescription>一张单对应一个物料。</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-3">

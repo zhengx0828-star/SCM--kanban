@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Boxes,
   FileSpreadsheet,
+  ListChecks,
   Package,
   Plus,
   Save,
@@ -14,8 +15,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
-import { CHART_PALETTE } from "@/lib/chart-palette";
+import { MATERIAL_DOT, buildMaterialRisk, materialDotColor, type MaterialRisk } from "@/lib/supply-risk";
 import { MaterialDetailDialog } from "@/components/projects/MaterialDetailDialog";
+import { ManageMaterialsDialog } from "@/components/projects/ManageMaterialsDialog";
 import { QuickAddRelationDialog } from "@/components/projects/QuickAddRelationDialog";
 import { DemandExcelImportDialog } from "@/components/projects/DemandExcelImportDialog";
 import { DemandVersionBar } from "@/components/projects/DemandVersionBar";
@@ -146,6 +148,27 @@ export default function ProjectSupplyDetailPage() {
   /* ---- 概览：未设 BOM 的物料数（保留原来列表行的关键信息） ---- */
   const noBomCount = useMemo(() => materialsByKey.filter((m) => m.bom == null).length, [materialsByKey]);
 
+  /* ---- 物料供需风险：圆点配色与「管理物料」共用这一份，别在渲染处另算 ----
+   *
+   * 需求源必须是**正在查看的版本**（viewedVersion），不能用 relations[0].demand
+   * （那只是当前版投影）—— 否则看历史版时，图表按旧需求画、圆点按新需求算，同一个物料两个结论。
+   * 产能 = 该项目该物料各供应商 12 月产能合计。
+   */
+  const riskByPn = useMemo(() => {
+    const demandArr = viewedVersion?.demand ?? relations[0]?.demand ?? null;
+    const map = new Map<string, MaterialRisk>();
+    for (const mat of materialsByKey) {
+      const bom = mat.bom;
+      const demandSeries =
+        demandArr && bom != null ? demandArr.map((v) => (v ?? 0) * bom) : Array(12).fill(0);
+      const capacitySeries = Array.from({ length: 12 }, (_, t) =>
+        mat.rows.reduce((s, r) => s + (r.capacity?.[t] ?? 0), 0)
+      );
+      map.set(mat.pn, buildMaterialRisk(mat.pn, mat.name, demandSeries, capacitySeries));
+    }
+    return map;
+  }, [materialsByKey, viewedVersion, relations]);
+
   /* ---- 版本对比弹窗用：压平成「物料 + BOM + 产能合计」（产能与 BOM 恒定，两版共用） ---- */
   const compareMaterials = useMemo(
     () =>
@@ -176,9 +199,10 @@ export default function ProjectSupplyDetailPage() {
   }, [suppliers]);
   const [openSupplier, setOpenSupplier] = useState<Supplier | null>(null);
 
-  /* ---- 弹窗：快速新增物料-供应商 / 导入供需 Excel ---- */
+  /* ---- 弹窗：快速新增物料-供应商 / 导入供需 Excel / 管理物料（批量移除） ---- */
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const [quickAddPrefill, setQuickAddPrefill] = useState<{ pn: string; name: string }>({ pn: "", name: "" });
 
   if (!isValid) {
@@ -328,6 +352,15 @@ export default function ProjectSupplyDetailPage() {
                       <Plus className="mr-1.5 h-4 w-4" />
                       新增物料-供应商
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setManageOpen(true)}
+                      disabled={materialsByKey.length === 0}
+                    >
+                      <ListChecks className="mr-1.5 h-4 w-4" />
+                      管理物料
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
                       <FileSpreadsheet className="mr-1.5 h-4 w-4" />
                       导入供需 Excel
@@ -350,11 +383,12 @@ export default function ProjectSupplyDetailPage() {
                       label="物料"
                       mode="single"
                       icon={<Boxes className="h-3.5 w-3.5 text-muted-foreground" />}
-                      options={materialsByKey.map((m, i) => ({
+                      options={materialsByKey.map((m) => ({
                         value: m.pn,
                         label: m.name,
                         sublabel: m.pn,
-                        color: CHART_PALETTE[i % CHART_PALETTE.length],
+                        // 圆点 = 供需状态，不再用分类调色板（红=有缺口，绿=全年够用，灰=无法判定）
+                        dotColor: materialDotColor(riskByPn.get(m.pn), m.bom),
                         badge: (
                           <span className="flex shrink-0 items-center gap-1">
                             <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -376,10 +410,17 @@ export default function ProjectSupplyDetailPage() {
                       placeholder="选择物料查看详情"
                       searchPlaceholder="搜索物料 PN 或名称…"
                     />
-                    <p className="mt-2 px-1 text-[11px] text-muted-foreground">
-                      共 {materialsByKey.length} 个物料
-                      {noBomCount > 0 && ` · ${noBomCount} 个未设 BOM`}
-                      ，选中后弹出 BOM / 需求 / 产能详情
+                    <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground">
+                      <span>
+                        共 {materialsByKey.length} 个物料
+                        {noBomCount > 0 && ` · ${noBomCount} 个未设 BOM`}
+                        ，选中后弹出 BOM / 需求 / 产能详情
+                      </span>
+                      <span className="flex items-center gap-2.5">
+                        <DotLegend color={MATERIAL_DOT.shortage} label="有缺口" />
+                        <DotLegend color={MATERIAL_DOT.ok} label="全年够用" />
+                        <DotLegend color={MATERIAL_DOT.unknown} label="无法判定" />
+                      </span>
                     </p>
                   </>
                 )}
@@ -409,6 +450,19 @@ export default function ProjectSupplyDetailPage() {
           setOpenMaterialPn(null);
           setQuickAddPrefill({ pn, name });
           setQuickAddOpen(true);
+        }}
+      />
+
+      {/* 管理物料：勾选批量从项目移除（只摘项目挂载，不动主数据） */}
+      <ManageMaterialsDialog
+        open={manageOpen}
+        onOpenChange={setManageOpen}
+        projectId={projectId}
+        projectName={project?.name ?? `项目 ${projectId}`}
+        materials={materialsByKey}
+        riskByPn={riskByPn}
+        onRemoved={(pns) => {
+          if (openMaterialPn && pns.includes(openMaterialPn)) setOpenMaterialPn(null);
         }}
       />
 
@@ -455,5 +509,15 @@ export default function ProjectSupplyDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+/** 图例小圆点（色值来自 MATERIAL_DOT，与下拉里的圆点同源） */
+function DotLegend({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+      {label}
+    </span>
   );
 }

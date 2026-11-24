@@ -125,6 +125,27 @@ export function buildMaterialRisk(
   };
 }
 
+/** 物料圆点配色（错峰必须与下面的判定同源，不要在页面里另写一套阈值） */
+export const MATERIAL_DOT = {
+  /** 任一月份产能 < 需求 */
+  shortage: "#ef4444",
+  /** 全年每月产能 ≥ 需求 */
+  ok: "#10b981",
+  /** 无法判定：未设 BOM / BOM=0 / 全年需求为 0 */
+  unknown: "#94a3b8",
+} as const;
+
+/**
+ * 物料圆点颜色（供需管理「管理物料」与物料下拉共用）。
+ *
+ * 只有红绿两色的前提是**能判**；未设 BOM 或全年需求为 0 时除不出供应系数，
+ * 涂绿等于谎报「够用」，所以给中性灰，与列表里「未设 BOM」徽标口径一致。
+ */
+export function materialDotColor(risk: MaterialRisk | undefined, bom: number | null): string {
+  if (!risk || bom == null || bom === 0 || risk.totalDemand <= 0) return MATERIAL_DOT.unknown;
+  return risk.hasShortage ? MATERIAL_DOT.shortage : MATERIAL_DOT.ok;
+}
+
 export interface SupplyRiskSummary {
   /** 存在缺口的物料数 */
   shortageMaterialCount: number;

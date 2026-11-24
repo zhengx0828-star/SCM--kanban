@@ -186,6 +186,19 @@ export interface ProjectBomUpdateInput {
   bom_factor: number;
 }
 
+/** 从项目移除物料（管理物料 · 批量）：只删项目挂载，不动物料主数据 */
+export interface ProjectMaterialRemoveInput {
+  pns: string[];
+}
+
+export interface ProjectMaterialRemoveResult {
+  /** 实际移除的物料数 */
+  removed_materials: number;
+  /** 实际删除的供应明细行数（= 这些物料名下供应商数之和） */
+  removed_links: number;
+  pns: string[];
+}
+
 /** 更新项目供应明细 */
 export type ProjectSupplyRelationUpdateInput = Partial<
   Omit<ProjectSupplyRelationCreateInput, "supply_relation_id">

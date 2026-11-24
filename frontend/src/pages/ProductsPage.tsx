@@ -85,17 +85,7 @@ export default function ProductsPage() {
             {/* 页头（文档站风格） */}
             <section id="overview" className="scroll-mt-20">
               <h1 className="text-2xl font-semibold tracking-tight">产品管理</h1>
-              <p className="mt-2 text-muted-foreground">
-                管理产品列表、价格与库存信息，支持关键字搜索、状态筛选、分页与增删改。
-              </p>
             </section>
-
-            {/* Callout（移植官网推荐提示条） */}
-            <div className="my-6 rounded-lg border border-emerald-600 bg-emerald-100 px-4 py-3 text-sm leading-relaxed text-emerald-900 dark:border-emerald-400 dark:bg-emerald-900 dark:text-emerald-100">
-              <strong>提示：</strong> 页面 UI 移植自 shadcn/ui 官网风格。数据存储在本地 SQLite（
-              <code className="font-mono">backend/products.db</code>
-              ），删除该文件后重启即可重置演示数据。
-            </div>
 
             {/* 产品列表区块 */}
             <section id="products" className="scroll-mt-20">

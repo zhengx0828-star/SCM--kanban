@@ -28,6 +28,8 @@ import type {
   ProjectDemandVersionSummary,
   ProjectListParams,
   ProjectListResponse,
+  ProjectMaterialRemoveInput,
+  ProjectMaterialRemoveResult,
   ProjectSupplyRelation,
   ProjectSupplyRelationCreateInput,
   ProjectSupplyRelationQuickCreateInput,
@@ -237,6 +239,13 @@ export const projectApi = {
   /** 项目下关联的物料（按 PN 去重，供需管理等模块的物料选择器用） */
   materials(projectId: number) {
     return apiClient.get<Material[]>(`/projects/${projectId}/materials`).then((res) => res.data);
+  },
+
+  /** 从项目移除物料（删除该项目下该 PN 的全部供应明细，原子；不动主数据） */
+  removeMaterials(projectId: number, data: ProjectMaterialRemoveInput) {
+    return apiClient
+      .post<ProjectMaterialRemoveResult>(`/projects/${projectId}/materials/bulk-remove`, data)
+      .then((res) => res.data);
   },
 
   /** 挂载供应关系到项目 */
