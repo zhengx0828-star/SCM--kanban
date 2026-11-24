@@ -8,6 +8,7 @@
 - POST   /api/projects/{id}/relations        挂一条供应关系到项目（带项目专属字段）
 - PATCH  /api/projects/{id}/relations/{link_id}   维护项目专属字段
 - DELETE /api/projects/{id}/relations/{link_id}   解除项目-供应关系
+- POST   /api/projects/{id}/materials/bulk-remove 从项目移除物料（删除该 PN 下全部明细，原子）
 - PUT    /api/projects/{id}/demand           批量维护某物料的客户需求（1-12月）
 - PUT    /api/projects/{id}/bom              批量维护某物料的 BOM 用量系数
 - GET    /api/projects/{id}/materials        项目下关联的物料（去重）
@@ -45,6 +46,8 @@ from ..schemas import (
     ProjectDemandUpdate,
     ProjectDemandVersionSummary,
     ProjectList,
+    ProjectMaterialRemoveInput,
+    ProjectMaterialRemoveResult,
     ProjectRead,
     ProjectSupplyRelationCreate,
     ProjectSupplyRelationQuickCreate,
@@ -54,6 +57,7 @@ from ..schemas import (
     SupplierMaterialBrief,
     SupplierRead,
 )
+from ..supplier_risk import assess_supplier_risk
 
 router = APIRouter(prefix="/api/projects", tags=["Projects"])
 
@@ -534,10 +538,13 @@ def list_project_suppliers(project_id: int, db: Session = Depends(get_db)) -> li
             mats.append(rel.material)
 
     # 构造响应：materials 限定为该项目下的物料（覆盖 ORM 上的 @property）
+    # 地图颜色用实时红黄绿（供应商级，不随项目切片变 —— 一个项目断供，这家在别处也是红）
+    risks = assess_supplier_risk(db)
     result: list[SupplierRead] = []
     for sid, (supplier, mats) in by_supplier.items():
         read = SupplierRead.model_validate(supplier)
         read.materials = [SupplierMaterialBrief.model_validate(m) for m in mats]
+        read.risk = risks.get(sid)
         result.append(read)
     return result
 
@@ -909,6 +916,58 @@ def delete_project_relation(project_id: int, link_id: int, db: Session = Depends
     link = _get_link(db, project_id, link_id)
     db.delete(link)
     db.commit()
+
+
+@router.post(
+    "/{project_id}/materials/bulk-remove",
+    response_model=ProjectMaterialRemoveResult,
+    summary="从项目移除物料（删除该项目下该 PN 的全部供应明细）",
+)
+def remove_project_materials(
+    project_id: int, payload: ProjectMaterialRemoveInput, db: Session = Depends(get_db)
+) -> ProjectMaterialRemoveResult:
+    """「管理物料」的删除落点：**只摘掉项目挂载，不动主数据**。
+
+    物料在项目里不是一行，而是「项目 × 物料 × 供应商」的一组明细行。移除一个物料 =
+    删掉该项目该 PN 下所有明细（含各供应商 12 月产能与 BOM 系数），一次事务提交。
+
+    刻意**不动**下面这些：
+    - `materials` / `supply_relations` 全局主数据 —— 其他项目还在引用
+    - `share_records` / `inventory_plans` / `changes` —— 都不挂项目，按物料独立存在
+    因此移除不会像「删物料主数据」那样 CASCADE 静默清掉份额与库存（2026-11-03 事故）。
+    需要彻底删主数据请走「供应商列表 → 物料」，那里有 409 引用保护。
+
+    删除不影响客户需求：需求存在 `project_demand_versions`，明细行上的 `demand` 只是当前版投影。
+    """
+    _get_project(db, project_id)
+
+    pns = [p.strip() for p in payload.pns if p and p.strip()]
+    if not pns:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请指定要移除的物料 PN")
+
+    rows = db.execute(
+        select(ProjectSupplyRelation, Material.pn)
+        .join(SupplyRelation, ProjectSupplyRelation.supply_relation_id == SupplyRelation.id)
+        .join(Material, SupplyRelation.material_id == Material.id)
+        .where(ProjectSupplyRelation.project_id == project_id, Material.pn.in_(pns))
+    ).all()
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"项目 {project_id} 下没有这些物料的供应明细：{'、'.join(pns)}",
+        )
+
+    removed_pns = sorted({pn for _, pn in rows})
+    for link, _ in rows:
+        db.delete(link)
+    db.commit()
+
+    return ProjectMaterialRemoveResult(
+        removed_materials=len(removed_pns),
+        removed_links=len(rows),
+        pns=removed_pns,
+    )
 
 
 # --------------------------------------------------------------------------- #

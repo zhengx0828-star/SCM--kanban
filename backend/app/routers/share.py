@@ -128,6 +128,10 @@ def _auto_share_from_bases(bases: list[dict]) -> Optional[float]:
     """从 share_record.bases 自带的 lines + share 自动算份额（%）。
 
     公式：份额 = Σ(b.share × b.lines) ÷ Σ(b.lines)
+    - 分母只含**这一条记录自己**的基地 → 只在部分基地供货的供应商会被高估
+      （基地A 60%/2 线、基地B 不供货 → 得 60，而按物料 5 条线应为 24）。
+      所以只用于**单记录**场景（手动新增 / 手改，没有全物料视图）；
+      Excel 导入走物料级分母，见 `import_share_records` 里的 `base_lines` 聚合。
     - 基地份额全部 ≤1 视为小数口径 ×100；也兼容直接录百分比（>1）的口径；
     - 两种口径混用不允许（调用方需先用 `_mixed_share_scale` 拦掉，避免静默错 100 倍）；
     - 至少一个基地有份额值且总拉线 > 0 才算；
@@ -159,6 +163,64 @@ def _auto_share_from_bases(bases: list[dict]) -> Optional[float]:
 def _sum_lines_from_bases(bases: list[dict]) -> int:
     """该记录自身所有基地的拉线合计（四象限点大小）。"""
     return sum(int(b.get("lines") or 0) for b in bases if isinstance(b.get("lines"), int))
+
+
+def _material_lines_by_base(
+    db: Session,
+    project_id: int,
+    material_id: int,
+    month: str,
+    extra: Optional[list[dict]] = None,
+    exclude_id: Optional[int] = None,
+) -> dict[str, int]:
+    """该（项目 × 月份 × 物料）下已登记的「基地 → 拉线数」。
+
+    拉线数是**基地**属性（这个基地有几条产线），同一基地所有供应商共用同一个数。
+    手改单条记录时也算不出全貌 —— 必须把同物料其它记录的基地一起汇总，
+    否则只供部分基地的供应商会被算成 100%（与 Excel 导入的口径不一致）。
+    """
+    stmt = (
+        select(ShareRecord)
+        .join(SupplyRelation, ShareRecord.supply_relation_id == SupplyRelation.id)
+        .where(
+            ShareRecord.project_id == project_id,
+            ShareRecord.month == month,
+            SupplyRelation.material_id == material_id,
+        )
+    )
+    out: dict[str, int] = {}
+    for r in db.execute(stmt).scalars().all():
+        if exclude_id is not None and r.id == exclude_id:
+            continue
+        for b in _parse_bases(r.bases):
+            name, lines = b.get("base"), b.get("lines")
+            if name and isinstance(lines, int) and lines > 0:
+                out[name] = max(out.get(name, 0), lines)
+    for b in extra or []:
+        name, lines = b.get("base"), b.get("lines")
+        if name and isinstance(lines, int) and lines > 0:
+            out[name] = max(out.get(name, 0), lines)
+    return out
+
+
+def _share_from_base_lines(bases: list[dict], lines_by_base: dict[str, int]) -> Optional[float]:
+    """份额 = Σ(该供应商在该基地的份额 × 该基地拉线数) ÷ Σ 该物料全部基地的拉线数。
+
+    缺席的基地按 0 计 —— 这样只要各基地内部份额合计 100%，物料级份额必然合计 100%。
+    """
+    denom = sum(v for v in lines_by_base.values() if v > 0)
+    if denom <= 0:
+        return None
+    scale = 100.0 if _is_decimal_scale([b.get("share") for b in bases]) else 1.0
+    num = 0.0
+    hit = False
+    for b in bases:
+        s, name = b.get("share"), b.get("base")
+        if s is None or name not in lines_by_base:
+            continue
+        num += float(s) * scale * lines_by_base[name]
+        hit = True
+    return round(num / denom, 2) if hit else None
 
 
 def _compute_record(record: ShareRecord, all_for_material: list[ShareRecord]) -> None:
@@ -653,9 +715,12 @@ def create_share_record(payload: ShareRecordCreate, db: Session = Depends(get_db
         bases=json.dumps([b.model_dump() for b in payload.bases], ensure_ascii=False) if payload.bases is not None else None,
         remark=payload.remark,
     )
-    # 有 bases 且未显式传 share_current → 按各基地 (share × lines) 公式自动算
+    # 有 bases 且未显式传 share_current → 按「基地份额 × 基地拉线数」自动算
+    # 分母取该物料全部基地（含其它供应商已登记的基地），不是这条记录自己的线数
     if record.bases and payload.share_current is None:
-        auto = _auto_share_from_bases(_parse_bases(record.bases))
+        bl = _parse_bases(record.bases)
+        lines_by_base = _material_lines_by_base(db, payload.project_id, rel.material_id, payload.month, extra=bl)
+        auto = _share_from_base_lines(bl, lines_by_base)
         if auto is not None:
             record.share_current = auto
     db.add(record)
@@ -706,9 +771,18 @@ def update_share_record(record_id: int, payload: ShareRecordUpdate, db: Session 
         record.remark = payload.remark
 
     if bases_changed and not manual_override:
-        # 只改基地字段 = 清除手改标记，按该记录自身 base.lines 自动重算份额
+        # 只改基地字段 = 清除手改标记，按「该物料全部基地」的线数重新算份额
         record.edited_manually = False
-        auto = _auto_share_from_bases(_parse_bases(record.bases))
+        rel_for_calc = db.get(SupplyRelation, record.supply_relation_id)
+        bl = _parse_bases(record.bases)
+        if rel_for_calc is not None:
+            lines_by_base = _material_lines_by_base(
+                db, record.project_id, rel_for_calc.material_id, record.month,
+                extra=bl, exclude_id=record.id,
+            )
+            auto = _share_from_base_lines(bl, lines_by_base)
+        else:
+            auto = _auto_share_from_bases(bl)
         if auto is not None:
             record.share_current = auto
     else:
@@ -748,29 +822,37 @@ def delete_share_record(record_id: int, db: Session = Depends(get_db)) -> Respon
 @router.post("/import", response_model=ShareImportResult, summary="Excel 导入份额数据")
 async def import_share_records(
     request: Request,
-    project_id: int = Query(..., description="项目 ID"),
-    month: str = Query(..., pattern=MONTH_PATTERN, description="目标月份（YYYY-MM）"),
+    project_id: int = Query(..., description="默认项目 ID（文件里没写项目时用它）"),
+    month: str = Query(..., pattern=MONTH_PATTERN, description="默认目标月份（YYYY-MM；文件里没写月份时用它）"),
     file_path: Optional[str] = Query(None, description="兼容旧调用：服务器本地 Excel 绝对路径（浏览器上传时无需）"),
     db: Session = Depends(get_db),
 ) -> ShareImportResult:
-    """Excel 导入（openpyxl 只读模式），与供需管理一致的「选择文件」方式：
-    前端弹窗里点「选择文件」从本机挑选 .xlsx/.xls，文件内容放在请求体里上传
-    （application/octet-stream）；请求体为空时回退 file_path（本地脚本兼容）。
+    """Excel 导入（openpyxl 只读模式），浏览器「选择文件」上传请求体（application/octet-stream）。
 
-    列约定（表头行）：
+    列约定（表头行，按列名匹配、不看顺序）：
       物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C |
-      基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数 | ...
+      基地A_份额 | 基地A_线数 | 基地B_份额 | 基地B_线数 | ...                    ← 宽表（基地写在列名里）
+      物料PN | 物料名称 | 供应商代码 | 供应商名称 | 段 | 基地 | 拉线数 | 基地份额 | 本月份额 | Q | D | C   ← 长表
+    可选列：项目代码 / 月份 —— 填了就能在同一个文件里混多个项目、多个月份。
+
+    表头可以有多套（表头不同的块各归各的）：
+      - 多个 sheet 各一行表头；同一 sheet 里几块表头上下堆叠；块间基地列 / 列数 / 列顺序都可以不同；
+      - 表头之前可以有标题行（如「2026-11 份额表」），按列名识别表头，不看第几行。
+
+    项目 / 月份的确定顺序（先到先得）：
+      1. 行内「项目代码」「月份」两列；
+      2. sheet 名（如 `LFP3-2026-11`、`LFP3 2026年11月`）：用 **库里的项目代码** 匹配，月份取 20xx-xx；
+      3. 接口参数里的默认项目与月份。
+    项目代码在库里查不到 → 报错，不会静默落到默认项目（那会直接把别人的数写进这个项目）。
 
     规则：
-    - 按 (pn, supplier_code) 定位供应关系，不存在则报错跳过
-    - 校验：份额 ∈ [0,100]、QDC 五档、同项目同物料份额和 ≈ 100%（容差 ±1%）
-    - 份额口径兼容：0-100 百分数（71）与 0-1 小数（0.71）都收；整批全部 ≤1 时
-      按小数口径 ×100 归一；两种口径混填则报错（避免静默错 100 倍）
-    - 基地列按成对解析：「基地X_份额」+「基地X_线数」两列合并为一条 base；
-      表头兼容「基地A份额 / 基地A条数」等（下划线可省，「线数 / 条数 / 拉线数」等价）；
-      仅有份额无线数 → 报错误行；仅无线数有份额 → 报错误行；基地名去重；空值忽略
-    - 「本月份额」可留空：有基地数据时按 Σ(份额 × 拉线) ÷ Σ拉线 自动算
+    - PN / 供应商代码在主档里没有 → 按文件里的名称自动建档并挂到该行所属项目（只复用、绝不改名）
+    - 校验：份额 ∈ [0,100]、QDC 五档、**按（项目 × 月份 × 物料）** 份额和 ≈ 100%（容差 ±1%）
+    - 份额口径兼容 0-100 与 0-1 小数；整批全 ≤1 视为小数口径；混填报错（避免静默错 100 倍）
+    - 基地列成对解析（份额 + 拉线数），前缀「基地」可省；缺一列在表头级报错
+    - 「本月份额」可留空：有基地数据时按 Σ(基地份额 × 拉线数) ÷ 该物料全部基地的拉线数 自动算
     - 手动修改过的记录（edited_manually=true）不覆盖，跳过
+    - 整批原子：任一行有错，一行都不写
     """
     try:
         import openpyxl
@@ -781,7 +863,8 @@ async def import_share_records(
     import os
     import re
 
-    if db.get(Project, project_id) is None:
+    default_project = db.get(Project, project_id)
+    if default_project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"项目 {project_id} 不存在")
 
     # Excel 来源：优先请求体（浏览器「选择文件」上传）；为空时回退服务器本地路径
@@ -798,159 +881,444 @@ async def import_share_records(
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="未收到 Excel 文件：请先在弹窗中选择文件再导入")
 
-    ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
-    header = next(rows_iter, None)
-    if header is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Excel 为空")
+    def _txt(v) -> str:
+        return "" if v is None else str(v).strip()
 
-    def col_idx(name: str) -> Optional[int]:
-        for i, h in enumerate(header):
+    # ---------- 表头解析（按块，不按整表） ----------
+    base_pat = re.compile(r"^(?P<name>.+?)_?(?P<kind>份额|拉线数|线数|条数)$")
+    base_kind = {"份额": "share", "线数": "lines", "条数": "lines", "拉线数": "lines"}
+    TOTAL_LIKE = ("本月", "系统", "总", "合计")
+
+    def col_sub(hdr, name: str) -> Optional[int]:
+        for i, h in enumerate(hdr):
             if h and name in str(h):
                 return i
         return None
 
-    idx_pn = col_idx("物料PN") or col_idx("物料") or 0
-    idx_scode = col_idx("供应商代码")
-    idx_share = col_idx("本月份额") or col_idx("本月系统份额")
-    idx_q = col_idx("Q")
-    idx_d = col_idx("D")
-    idx_c = col_idx("C")
-
-    # 基地列：表头形如「基地X_份额」「基地X_线数」，成对解析。
-    # 兼容写法：下划线可有可无，「线数 / 条数 / 拉线数」等价 —— 客户手上的 ERP 导出
-    # 常写「基地A份额 / 基地A条数」，以前识别不了会被静默丢弃。
-    known_idx = {i for i in (idx_pn, idx_scode, idx_share, idx_q, idx_d, idx_c) if i is not None}
-    base_cols: dict[str, dict[str, int]] = {}  # base_name -> {"share": col, "lines": col}
-    base_pat = re.compile(r"^(?P<name>.+?)_?(?P<kind>份额|拉线数|线数|条数)$")
-    base_kind_map = {"份额": "share", "线数": "lines", "条数": "lines", "拉线数": "lines"}
-    for i, h in enumerate(header):
-        if i in known_idx:
-            continue
-        hs = str(h).strip() if h else ""
-        m = base_pat.match(hs)
-        if not m:
-            continue
-        bname = (m.group("name") or "").strip()
-        # 排除「本月系统份额」这类总列（kind 也是「份额」）被误当成基地
-        if not bname or bname.startswith(("本月", "系统", "总", "合计")):
-            continue
-        # ⚠️ kind 是正则捕获的中文词，必须归一成英文键再存，
-        # 否则下面取值时用 cols["share"] / cols["lines"] 永远取不到 → 基地整列被静默丢弃。
-        base_cols.setdefault(bname, {})[base_kind_map[m.group("kind")]] = i
-
-    # ---------- 长表模式（推荐模板） ----------
-    # 宽表把「基地」写进列名（基地A_份额 / 基地A_线数），段一换、基地一多，表头和列数就得改，
-    # 同一项目的模组段与电芯段只能拆成两块表头上下堆叠 —— 而导入只解析第一行表头，
-    # 第二块会被当数据行解析 → 「未找到供应关系」→ 整批 422。
-    # 长表把基地降级为数据列：一行 = 供应商 × 段 × 基地，列数固定，段与基地随便加。
-    def exact_idx(*names: str) -> Optional[int]:
+    def col_exact(hdr, *names: str) -> Optional[int]:
         """按整格精确匹配列名（不用子串，避免「基地C份额」被 "C" 命中这类串味）。"""
-        for i, h in enumerate(header):
+        for i, h in enumerate(hdr):
             if h is not None and str(h).strip() in names:
                 return i
         return None
 
-    idx_base = exact_idx("基地", "基地名称")
-    idx_lines = exact_idx("拉线数", "线数", "条数")
-    idx_bshare = exact_idx("基地份额", "基地配额")
-    idx_seg = exact_idx("段", "工艺段", "模块")
-    long_mode = idx_base is not None and idx_lines is not None and idx_bshare is not None
+    def parse_header(hdr) -> dict:
+        idx_share = col_sub(hdr, "本月份额")
+        if idx_share is None:
+            idx_share = col_sub(hdr, "本月系统份额")
+        idx_pn = col_sub(hdr, "物料PN")
+        if idx_pn is None:
+            idx_pn = col_sub(hdr, "物料")
+        if idx_pn is None:
+            idx_pn = 0
+        ctx: dict = {
+            "pn": idx_pn,
+            "mname": col_exact(hdr, "物料名称", "名称"),
+            "scode": col_sub(hdr, "供应商代码"),
+            "sname": col_exact(hdr, "供应商名称", "供应商"),
+            "share": idx_share,
+            # 可选：行级项目 / 月份，用于一份文件混多个项目、多个月份
+            "pcode": col_exact(hdr, "项目代码", "项目编码", "项目"),
+            "pmonth": col_exact(hdr, "月份", "数据月份", "份额月份"),
+        }
+        # 长表那几列是唯一列名，先占位，避免被基地正则（「基地份额」也能匹配成基地名「基地」）抢走
+        ctx["base"] = col_exact(hdr, "基地", "基地名称")
+        ctx["lines"] = col_exact(hdr, "拉线数", "线数", "条数")
+        ctx["bshare"] = col_exact(hdr, "基地份额", "基地配额")
+        ctx["seg"] = col_exact(hdr, "段", "工艺段", "模块")
+        used = {i for i in ctx.values() if isinstance(i, int)}
+
+        # 基地列：必须在评分列之前识别 —— 否则列序一换（「C份额」排在「C」前面），
+        # 评分列按子串找就会被「C份额」命中，整块 QDC 串味。
+        bases: dict[str, dict[str, int]] = {}
+        for i, h in enumerate(hdr):
+            if i in used:
+                continue
+            hs = str(h).strip() if h else ""
+            m = base_pat.match(hs)
+            if not m:
+                continue
+            bname = (m.group("name") or "").strip()
+            # 排除「本月系统份额」这类总列（kind 也是「份额」）被误当成基地
+            if not bname or bname.startswith(TOTAL_LIKE):
+                continue
+            # ⚠️ kind 是正则捕获的中文词，必须归一成英文键再存，
+            # 否则下面取值时用 cols["share"] / cols["lines"] 永远取不到 → 基地整列被静默丢弃。
+            bases.setdefault(bname, {})[base_kind[m.group("kind")]] = i
+            used.add(i)
+        ctx["bases"] = bases
+
+        # QDC 评分列：先整格精确匹配，再在「未被占用的列」里按缩写兜底（Q分 / 质量Q 这类写法）
+        def find_score(letter: str) -> Optional[int]:
+            i = col_exact(hdr, letter, f"{letter}分", f"{letter}评分")
+            if i is not None:
+                return i
+            for j, h in enumerate(hdr):
+                if j in used:
+                    continue
+                if h and letter in str(h):
+                    return j
+            return None
+
+        ctx["q"] = find_score("Q")
+        ctx["d"] = find_score("D")
+        ctx["c"] = find_score("C")
+        # 长表：基地降级为数据列，列数固定，段与基地随便加
+        ctx["long"] = ctx["base"] is not None and ctx["lines"] is not None and ctx["bshare"] is not None
+        return ctx
+
+    HEADER_PN = ("物料PN", "PN", "物料")
+    HEADER_OTHER = ("供应商代码", "物料名称", "本月份额", "本月系统份额")
+
+    def is_header_row(row) -> bool:
+        """表头行判定：同时出现 PN 列名与另一个列名。"""
+        texts = {_txt(v) for v in row}
+        return any(t in texts for t in HEADER_PN) and any(t in texts for t in HEADER_OTHER)
 
     result = ShareImportResult()
-    prev_month = _prev_month(month)
-    relation_map: dict[tuple[str, str], SupplyRelation] = {}
-    # 预加载该月全部记录（含手改标记）
-    existing_records = {
-        (r.supply_relation.material.pn, r.supply_relation.supplier.code): r
-        for r in _load_records(db, project_id, month)
-    }
-    prev_records = {
-        (r.supply_relation.material.pn, r.supply_relation.supplier.code): r
-        for r in _load_records(db, project_id, prev_month)
-    }
 
+    def check_header(block: dict, where: str) -> None:
+        """宽表表头自检：基地份额与拉线数必须成对，缺一列时直接说清楚缺哪一列。"""
+        if block["long"] or not block["bases"]:
+            return
+        for bname, cols in block["bases"].items():
+            if "share" in cols and "lines" in cols:
+                continue
+            missing = f"{bname}拉线数" if "share" in cols else f"{bname}份额"
+            result.errors.append(
+                f"{where}（表头）: 基地「{bname}」缺少「{missing}」列 —— 基地份额与拉线数必须成对出现"
+            )
+
+    # ---------- 项目 / 月份识别 ----------
+    # 一份文件里可以混多个项目、多个月份：行内列 > sheet 名 > 接口默认值。
+    # sheet 名匹配用**库里的项目代码或项目名称**（最长优先），不做自由正则拆分 ——
+    # 「LFP2026-11」这种名字正则拆会得到 LFP，而真实项目是 LFP3。
+    # 实际库里 code 常是 ABC/BBC 这种内部码、name 才是 LFP3/EP1，所以两套都要认；代码优先（唯一）。
+    all_projects = db.execute(select(Project)).scalars().all()
+    project_by_id_map = {p.id: p for p in all_projects}
+    alias_map: dict[str, Project] = {}
+    for p in all_projects:
+        c = (p.code or "").strip().lower()
+        if c:
+            alias_map[c] = p
+    for p in all_projects:
+        n = (p.name or "").strip().lower()
+        if n and n not in alias_map:
+            alias_map[n] = p
+    sorted_aliases = sorted(alias_map, key=len, reverse=True)
+
+    # 月份两位优先：写成 (0?[1-9]|1[0-2]) 时 "2026-11" 会先命中 "1" → 变成 1 月
+    YM_RE = re.compile(r"(20\d{2})\s*[-_/.年]?\s*(1[0-2]|0?[1-9])\s*月?(?!\d)")
+
+    def norm_month(v) -> Optional[str]:
+        """把 2026-11 / 2026/11 / 202611 / 2026年11月 / datetime 统一成 YYYY-MM。"""
+        if v is None:
+            return None
+        if hasattr(v, "year") and hasattr(v, "month"):
+            return f"{v.year}-{int(v.month):02d}"
+        s = str(v).strip()
+        if not s:
+            return None
+        m = re.fullmatch(r"(20\d{2})\s*[-_/.年]?\s*(1[0-2]|0?[1-9])\s*月?", s)
+        if not m:
+            return None
+        return f"{int(m.group(1))}-{int(m.group(2)):02d}"
+
+    def project_aliases_text() -> str:
+        return " / ".join(
+            f"{p.code}（{p.name}）" if (p.code or "").strip() and (p.name or "").strip() else (p.code or p.name or f"#{p.id}")
+            for p in all_projects
+        ) or "（库里没有项目）"
+
+    def detect_from_title(title: str) -> tuple[Optional[Project], Optional[str]]:
+        t = (title or "").strip().lower()
+        if not t:
+            return None, None
+        mon = None
+        m = YM_RE.search(t)
+        if m:
+            mon = f"{int(m.group(1))}-{int(m.group(2)):02d}"
+        proj = None
+        for alias in sorted_aliases:
+            if alias and alias in t:
+                proj = alias_map[alias]
+                break
+        return proj, mon
+
+    def label_of(pid: int, mon: str) -> str:
+        p = project_by_id_map.get(pid)
+        if p is None:
+            return f"项目{pid} {mon}"
+        return f"{(p.name or p.code or ('项目%d' % pid))} {mon}"
+
+    def cell_of(ctx: dict, row, field: str):
+        """按当前块的表头取单元格（列号随块变化）。"""
+        i = ctx.get(field)
+        return row[i] if i is not None and i < len(row) else None
+
+    def resolve_target(ctx: dict, row, sheet_pid: int, sheet_month: str) -> tuple[int, str, Optional[str]]:
+        """行级「项目代码」「月份」列优先，其次 sheet 级（sheet 名解析），最后接口参数。
+
+        返回 (项目 ID, 月份, 错误文案)。错误交给调用方决定报不报 ——
+        预扫描只关心拉线数，不该重复报同一行两次。
+        """
+        pid, mon = sheet_pid, sheet_month
+        pcode_text = _txt(cell_of(ctx, row, "pcode"))
+        if pcode_text:
+            proj = alias_map.get(pcode_text.lower())
+            if proj is None:
+                return pid, mon, f"项目「{pcode_text}」不存在，可用：{project_aliases_text()}"
+            pid = proj.id
+        pmonth_text = _txt(cell_of(ctx, row, "pmonth"))
+        if pmonth_text:
+            parsed = norm_month(pmonth_text)
+            if parsed is None:
+                return pid, mon, f"月份「{pmonth_text}」看不懂，请写成 2026-11 / 2026/11 / 202611"
+            mon = parsed
+        return pid, mon, None
+
+    # ---------- 逐 sheet、逐行切块 ----------
+    sheets = list(wb.worksheets)
+    multi_sheet = len(sheets) > 1
+
+    def where_of(sheet_title: str, row_num: int) -> str:
+        return f"{sheet_title} 第 {row_num} 行" if multi_sheet else f"第 {row_num} 行"
+
+    # (sheet 名, 行号, 该块表头, 数据行, sheet 级默认项目, sheet 级默认月份)
+    blocks: list[tuple[str, int, dict, tuple, int, str]] = []
+    for sheet in sheets:
+        sheet_proj, sheet_mon = detect_from_title(sheet.title)
+        sheet_pid = sheet_proj.id if sheet_proj else default_project.id
+        sheet_month = sheet_mon or month
+        ctx: Optional[dict] = None
+        for row_num, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+            if not row or all(_txt(v) == "" for v in row):
+                continue
+            if is_header_row(row):
+                ctx = parse_header(row)
+                check_header(ctx, where_of(sheet.title, row_num))
+                continue
+            if ctx is None:
+                # 表头之前的标题行 / 说明行（如「2026-11 份额」），跳过
+                continue
+            blocks.append((sheet.title, row_num, ctx, row, sheet_pid, sheet_month))
+
+    if not blocks and not result.errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="没找到可导入的数据：每个 sheet 都要有一行表头（含「物料PN」「供应商代码」「本月份额」等列名），表头下面才是数据行",
+        )
+
+    relation_map: dict[tuple[str, str], SupplyRelation] = {}
     all_relations = db.execute(
         select(SupplyRelation).options(selectinload(SupplyRelation.material), selectinload(SupplyRelation.supplier))
     ).scalars().all()
     for rel in all_relations:
         relation_map[(rel.material.pn, rel.supplier.code)] = rel
 
-    rows: list[tuple[dict, tuple[str, str]]] = []
-    # 长表模式的跨行聚合容器：同一 (PN, 供应商) 的多条「段 × 基地」行合并成一条份额记录
-    long_merged: dict[tuple[str, str], dict] = {}
-    long_order: list[tuple[str, str]] = []
-    long_segs: dict[str, set[str]] = defaultdict(set)  # pn → 该物料在文件里出现过的段
-    long_base_total: dict[tuple[str, str, str], float] = defaultdict(float)  # (pn, 段, 基地) → 各供应商份额合计
-    long_bshare_vals: list[float] = []  # 整批基地份额原值，用于口径判定
-    row_num = 1  # 数据从第 2 行开始
-    for row in rows_iter:
-        row_num += 1
-        if not row or all(v is None or str(v).strip() == "" for v in row):
+    # ---------- 基地拉线数（**基地**属性，不是供应商属性）----------
+    # 拉线数 = 这个基地有几条产线，同一基地的所有供应商共用同一个数。所以：
+    #   ① 同一基地被填了两个不同的数 → 直接报错。以前取 max，等于悄悄替用户改数；
+    #   ② 同一基地只在任意一行填一次即可，其余供应商的行留空自动继承（长表、宽表都一样）。
+    base_lines: dict[tuple[int, str, str, str], int] = {}
+    base_lines_src: dict[tuple[int, str, str, str], str] = {}
+    for sheet_title, row_num, ctx, row, sheet_pid, sheet_month in blocks:
+        where = where_of(sheet_title, row_num)
+        pid, mon, err = resolve_target(ctx, row, sheet_pid, sheet_month)
+        if err:
+            continue  # 这条错主循环会报，别重复
+        pn = _txt(row[ctx["pn"]]) if ctx["pn"] is not None and ctx["pn"] < len(row) else ""
+        if not pn:
             continue
-        pn = str(row[idx_pn]).strip() if idx_pn is not None and row[idx_pn] is not None else ""
-        scode = str(row[idx_scode]).strip() if idx_scode is not None and row[idx_scode] is not None else ""
+        pairs: list[tuple[str, str]] = []
+        if ctx["long"]:
+            pairs.append((_txt(cell_of(ctx, row, "base")), _txt(cell_of(ctx, row, "lines"))))
+        else:
+            for bname, cols in ctx["bases"].items():
+                raw = row[cols["lines"]] if "lines" in cols and cols["lines"] < len(row) else None
+                pairs.append((bname, _txt(raw)))
+        for bname, text in pairs:
+            if not bname or not text:
+                continue
+            try:
+                val = int(float(text))
+            except (TypeError, ValueError):
+                continue  # 非数字留给主循环报
+            k = (pid, mon, pn, bname)
+            if k in base_lines and base_lines[k] != val:
+                result.errors.append(
+                    f"{where}: 基地「{bname}」的拉线数前后不一致（{base_lines_src[k]} 写 {base_lines[k]}，这里写 {val}）"
+                    "—— 拉线数是基地的产线数，同一基地只能填一个数"
+                )
+                continue
+            base_lines[k] = val
+            base_lines_src[k] = where
+
+    # 该（项目 × 月份）已有记录惰性加载：文件可能跨项目跨月，不能只预载默认那一个
+    rec_cache: dict[tuple[int, str], dict[tuple[str, str], ShareRecord]] = {}
+
+    def records_of(pid: int, mon: str) -> dict[tuple[str, str], ShareRecord]:
+        k = (pid, mon)
+        if k not in rec_cache:
+            rec_cache[k] = {
+                (r.supply_relation.material.pn, r.supply_relation.supplier.code): r
+                for r in _load_records(db, pid, mon)
+            }
+        return rec_cache[k]
+
+    counters: dict[tuple[int, str], dict[str, int]] = defaultdict(
+        lambda: {
+            "imported": 0, "updated": 0, "skipped": 0,
+            "created_materials": 0, "created_suppliers": 0, "created_links": 0,
+        }
+    )
+
+    def _ensure_relation(pn: str, scode: str, mname: str, sname: str, seg: str, pid: int) -> Optional[SupplyRelation]:
+        """文件里出现了主档没有的 PN / 供应商代码 → 按文件名称自动建档，并挂到该行所属项目。
+
+        与 /projects/{id}/relations/quick-add 同语义：物料按 PN、供应商按代码全局唯一，
+        导入只「复用或新建」，**绝不改名**（改名会串到引用同一主数据的其他项目）。
+        """
+        material = db.execute(select(Material).where(Material.pn == pn)).scalars().first()
+        if material is None:
+            if not mname:
+                return None
+            material = Material(pn=pn, name=mname, segment=seg or None)
+            db.add(material)
+            db.flush()
+            counters[(pid, "")]["created_materials"] += 1
+        elif seg and not material.segment:
+            material.segment = seg
+        supplier = db.execute(select(Supplier).where(Supplier.code == scode)).scalars().first()
+        if supplier is None:
+            if not sname:
+                return None
+            supplier = Supplier(code=scode, name=sname)
+            db.add(supplier)
+            db.flush()
+            counters[(pid, "")]["created_suppliers"] += 1
+        rel = db.execute(
+            select(SupplyRelation).where(
+                SupplyRelation.material_id == material.id,
+                SupplyRelation.supplier_id == supplier.id,
+            )
+        ).scalars().first()
+        if rel is None:
+            rel = SupplyRelation(material_id=material.id, supplier_id=supplier.id)
+            db.add(rel)
+            db.flush()
+        link = db.execute(
+            select(ProjectSupplyRelation).where(
+                ProjectSupplyRelation.project_id == pid,
+                ProjectSupplyRelation.supply_relation_id == rel.id,
+            )
+        ).scalars().first()
+        if link is None:
+            db.add(ProjectSupplyRelation(project_id=pid, supply_relation_id=rel.id))
+            db.flush()
+            counters[(pid, "")]["created_links"] += 1
+        return rel
+
+    # 行键统一为（项目, 月份, PN, 供应商代码）：同一份文件里跨项目/跨月的行互不干扰
+    Key = tuple[int, str, str, str]
+    rows: list[tuple[dict, Key]] = []
+    long_merged: dict[Key, dict] = {}
+    long_order: list[Key] = []
+    long_segs: dict[str, set[str]] = defaultdict(set)  # pn → 该物料在文件里出现过的段（段是物料属性，不随项目变）
+    long_base_total: dict[tuple[int, str, str, str, str], float] = defaultdict(float)
+    long_bshare_vals: list[float] = []  # 整批基地份额原值，用于口径判定
+    long_mode_any = False
+    wide_merged: dict[Key, dict] = {}
+    wide_order: list[Key] = []
+
+    for sheet_title, row_num, ctx, row, sheet_pid, sheet_month in blocks:
+        where = where_of(sheet_title, row_num)
+
+        def cell(field: str):
+            """按当前块的表头取单元格（列号随块变化）。"""
+            i = ctx.get(field)
+            return row[i] if i is not None and i < len(row) else None
+
+        pn = _txt(row[ctx["pn"]]) if ctx["pn"] is not None and ctx["pn"] < len(row) else ""
+        scode = _txt(cell("scode"))
         if not pn or not scode:
             continue
-        key = (pn, scode)
-        if key not in relation_map:
-            # 长表允许同一文件里堆多个块（如模组段一块、电芯段一块），块与块之间的重复表头直接跳过
-            if long_mode and pn in ("物料PN", "物料", "PN"):
-                continue
-            result.errors.append(f"第 {row_num} 行: 未找到供应关系（PN={pn}, 供应商={scode}）")
+
+        # 行级项目 / 月份优先，其次 sheet 级（sheet 名解析结果），最后接口默认值
+        pid, mon, target_err = resolve_target(ctx, row, sheet_pid, sheet_month)
+        if target_err:
+            result.errors.append(f"{where}: {target_err}")
             continue
-        if long_mode:
-            rel = relation_map[key]
-            base_name = str(row[idx_base]).strip() if row[idx_base] is not None else ""
-            seg_name = str(row[idx_seg]).strip() if idx_seg is not None and row[idx_seg] is not None else ""
-            bshare_raw = row[idx_bshare] if idx_bshare < len(row) else None
-            lines_raw = row[idx_lines] if idx_lines < len(row) else None
-            bshare_text = str(bshare_raw).strip() if bshare_raw is not None else ""
-            lines_text = str(lines_raw).strip() if lines_raw is not None else ""
+
+        key: Key = (pid, mon, pn, scode)
+        rel_key = (pn, scode)
+        if rel_key not in relation_map:
+            rel = _ensure_relation(pn, scode, _txt(cell("mname")), _txt(cell("sname")), _txt(cell("seg")), pid)
+            if rel is None:
+                result.errors.append(
+                    f"{where}: PN={pn} / 供应商代码={scode} 在主数据里不存在，"
+                    "且文件未填物料名称或供应商名称，无法自动建档"
+                )
+                continue
+            relation_map[rel_key] = rel
+
+        if ctx["long"]:
+            long_mode_any = True
+            rel = relation_map[rel_key]
+            base_name = _txt(cell("base"))
+            seg_name = _txt(cell("seg"))
+            bshare_text = _txt(cell("bshare"))
+            lines_text = _txt(cell("lines"))
             if not base_name:
-                result.errors.append(f"第 {row_num} 行: 基地为空，请填写基地名称")
+                result.errors.append(f"{where}: 基地为空，请填写基地名称")
                 continue
             if not bshare_text and not lines_text:
                 continue  # 该行没填基地数据
-            if bool(bshare_text) != bool(lines_text):
-                result.errors.append(
-                    f"第 {row_num} 行: 基地「{base_name}」份额与拉线数必须成对填写"
-                    f"（份额={bshare_text or '空'}，拉线数={lines_text or '空'}）"
-                )
+            if not bshare_text:
+                result.errors.append(f"{where}: 基地「{base_name}」有拉线数无份额，请补配额值")
                 continue
+            if not lines_text:
+                # 拉线数是基地属性：前面任意一行填过就直接用，不要求每家供应商都写一遍
+                inherited = base_lines.get((pid, mon, pn, base_name))
+                if inherited is None:
+                    result.errors.append(
+                        f"{where}: 基地「{base_name}」还没有拉线数 —— 同一基地只需在任意一行填一次，"
+                        "其余供应商的行可以留空"
+                    )
+                    continue
+                lines_text = str(inherited)
             try:
                 bshare = float(bshare_text)
                 blines = int(float(lines_text))
             except (TypeError, ValueError):
-                result.errors.append(f"第 {row_num} 行: 基地「{base_name}」份额/拉线数不是数字")
+                result.errors.append(f"{where}: 基地「{base_name}」份额/拉线数不是数字")
                 continue
             if not (0 <= bshare <= 100):
-                result.errors.append(f"第 {row_num} 行: 基地「{base_name}」份额 {bshare} 越界（0-1 小数或 0-100）")
+                result.errors.append(f"{where}: 基地「{base_name}」份额 {bshare} 越界（0-1 小数或 0-100）")
                 continue
             if blines < 1:
-                result.errors.append(f"第 {row_num} 行: 基地「{base_name}」拉线数 {blines} 必须 ≥ 1")
+                result.errors.append(f"{where}: 基地「{base_name}」拉线数 {blines} 必须 ≥ 1")
                 continue
             try:
-                share = float(row[idx_share]) if idx_share is not None and row[idx_share] is not None else None
-                q = float(row[idx_q]) if idx_q is not None and row[idx_q] is not None else None
-                d = float(row[idx_d]) if idx_d is not None and row[idx_d] is not None else None
-                c = float(row[idx_c]) if idx_c is not None and row[idx_c] is not None else None
+                share = float(cell("share")) if cell("share") is not None else None
+                q = float(cell("q")) if cell("q") is not None else None
+                d = float(cell("d")) if cell("d") is not None else None
+                c = float(cell("c")) if cell("c") is not None else None
             except (TypeError, ValueError):
-                result.errors.append(f"第 {row_num} 行: 份额/评分不是数字")
+                result.errors.append(f"{where}: 份额/评分不是数字")
                 continue
             if share is not None and not (0 <= share <= 100):
-                result.errors.append(f"第 {row_num} 行: 份额 {share} 越界（应为 0-100）")
+                result.errors.append(f"{where}: 份额 {share} 越界（应为 0-100）")
                 continue
             qdc_errors = _validate_qdc(q, d, c)
             if qdc_errors:
-                result.errors.append(f"第 {row_num} 行: {'；'.join(qdc_errors)}")
+                result.errors.append(f"{where}: {'；'.join(qdc_errors)}")
                 continue
             # 段是物料属性：文件里的段必须与物料主档一致；主档没段则本次自动建档。
-            # 一个 PN 只属于一个段，所以「同项目同物料分模组/电芯」不会撞份额记录的唯一键。
             mat_seg = (rel.material.segment or "").strip()
             if seg_name and mat_seg and seg_name != mat_seg:
                 result.errors.append(
-                    f"第 {row_num} 行: 物料 {pn} 的段是「{mat_seg}」，文件写的是「{seg_name}」——一个物料只能属于一个段"
+                    f"{where}: 物料 {pn} 的段是「{mat_seg}」，文件写的是「{seg_name}」——一个物料只能属于一个段"
                 )
                 continue
             if seg_name and not mat_seg:
@@ -968,66 +1336,73 @@ async def import_share_records(
                     continue
                 if item[fld] is not None and item[fld] != val:
                     result.errors.append(
-                        f"第 {row_num} 行: 同一供应商（{pn} / {scode}）多行填了不同的{label}（{item[fld]} / {val}）"
+                        f"{where}: 同一供应商（{pn} / {scode}）多行填了不同的{label}（{item[fld]} / {val}）"
                     )
-                else:
+                elif item[fld] is None:
                     item[fld] = val
             base_key = (eff_seg, base_name)
             if base_key in item["bases"]:
                 result.errors.append(
-                    f"第 {row_num} 行: 物料 {pn} · {scode} 在「{eff_seg or '未分段'} / {base_name}」重复出现，请合并成一行"
+                    f"{where}: 物料 {pn} · {scode} 在「{eff_seg or '未分段'} / {base_name}」重复出现，请合并成一行"
                 )
                 continue
             item["bases"][base_key] = {"base": base_name, "share": bshare, "lines": blines}
             long_bshare_vals.append(bshare)
-            long_base_total[(pn, eff_seg, base_name)] += bshare
+            long_base_total[(pid, mon, pn, eff_seg, base_name)] += bshare
             continue
+
         try:
-            share = float(row[idx_share]) if idx_share is not None and row[idx_share] is not None else None
-            q = float(row[idx_q]) if idx_q is not None and row[idx_q] is not None else None
-            d = float(row[idx_d]) if idx_d is not None and row[idx_d] is not None else None
-            c = float(row[idx_c]) if idx_c is not None and row[idx_c] is not None else None
+            share = float(cell("share")) if cell("share") is not None else None
+            q = float(cell("q")) if cell("q") is not None else None
+            d = float(cell("d")) if cell("d") is not None else None
+            c = float(cell("c")) if cell("c") is not None else None
         except (TypeError, ValueError):
-            result.errors.append(f"第 {row_num} 行: 份额/评分不是数字")
+            result.errors.append(f"{where}: 份额/评分不是数字")
             continue
         if share is not None and not (0 <= share <= 100):
-            result.errors.append(f"第 {row_num} 行: 份额 {share} 越界（应为 0-100）")
+            result.errors.append(f"{where}: 份额 {share} 越界（应为 0-100）")
             continue
         errors = _validate_qdc(q, d, c)
         if errors:
-            result.errors.append(f"第 {row_num} 行: {'；'.join(errors)}")
+            result.errors.append(f"{where}: {'；'.join(errors)}")
             continue
         # 基地列：成对解析「基地X_份额」+「基地X_线数」
         bases_data: list[dict] = []
         base_bad = False
-        for bname, cols in base_cols.items():
+        for bname, cols in ctx["bases"].items():
             share_raw = row[cols["share"]] if "share" in cols and cols["share"] < len(row) else None
             lines_raw = row[cols["lines"]] if "lines" in cols and cols["lines"] < len(row) else None
-            share_text = str(share_raw).strip() if share_raw is not None else ""
-            lines_text = str(lines_raw).strip() if lines_raw is not None else ""
+            share_text = _txt(share_raw)
+            lines_text = _txt(lines_raw)
             if not share_text and not lines_text:
                 continue  # 整对都空：跳过
-            if share_text and not lines_text:
-                result.errors.append(f"第 {row_num} 行: 基地「{bname}」有份额无线数，请补拉线数量")
+            if not share_text:
+                result.errors.append(f"{where}: 基地「{bname}」有拉线数无份额，请补配额值")
                 base_bad = True
                 break
-            if lines_text and not share_text:
-                result.errors.append(f"第 {row_num} 行: 基地「{bname}」有拉线数无份额，请补配额值")
-                base_bad = True
-                break
+            if not lines_text:
+                # 拉线数是基地属性：前面任意一行填过就直接用
+                inherited = base_lines.get((pid, mon, pn, bname))
+                if inherited is None:
+                    result.errors.append(
+                        f"{where}: 基地「{bname}」还没有拉线数 —— 同一基地只需在任意一列填一次，其余留空即可"
+                    )
+                    base_bad = True
+                    break
+                lines_text = str(inherited)
             try:
                 sval = float(share_text)
                 lval = int(float(lines_text))
             except (TypeError, ValueError):
-                result.errors.append(f"第 {row_num} 行: 基地「{bname}」份额/线数不是数字")
+                result.errors.append(f"{where}: 基地「{bname}」份额/线数不是数字")
                 base_bad = True
                 break
             if not (0 <= sval <= 100):
-                result.errors.append(f"第 {row_num} 行: 基地「{bname}」份额 {sval} 越界（0-1 小数或 0-100）")
+                result.errors.append(f"{where}: 基地「{bname}」份额 {sval} 越界（0-1 小数或 0-100）")
                 base_bad = True
                 break
             if lval < 1:
-                result.errors.append(f"第 {row_num} 行: 基地「{bname}」拉线数量 {lval} 必须 ≥ 1")
+                result.errors.append(f"{where}: 基地「{bname}」拉线数量 {lval} 必须 ≥ 1")
                 base_bad = True
                 break
             bases_data.append({"base": bname, "share": sval, "lines": lval})
@@ -1035,7 +1410,7 @@ async def import_share_records(
             continue
         if bases_data and _mixed_share_scale(bases_data):
             result.errors.append(
-                f"第 {row_num} 行: 基地份额口径混用（同一行既有 ≤1 的小数又有 >1 的百分数），"
+                f"{where}: 基地份额口径混用（同一行既有 ≤1 的小数又有 >1 的百分数），"
                 "请统一口径（0-1 小数 或 0-100 百分数，不要混）"
             )
             continue
@@ -1045,13 +1420,38 @@ async def import_share_records(
             for b in bases_data:
                 if b.get("share") is not None:
                     b["share"] = round(b["share"] * 100, 2)
+        item = wide_merged.get(key)
+        if item is None:
+            item = {"share": share, "q": q, "d": d, "c": c, "bases": {}}
+            wide_merged[key] = item
+            wide_order.append(key)
+        for fld, label, val in (("share", "本月份额", share), ("q", "Q", q), ("d", "D", d), ("c", "C", c)):
+            if val is None:
+                continue
+            if item[fld] is not None and item[fld] != val:
+                result.errors.append(
+                    f"{where}: 同一供应商（{pn} / {scode}）多行填了不同的{label}（{item[fld]} / {val}）"
+                )
+            elif item[fld] is None:
+                item[fld] = val
+        for b in bases_data:
+            if b["base"] in item["bases"]:
+                result.errors.append(
+                    f"{where}: 物料 {pn} · {scode} 在基地「{b['base']}」重复出现，请合并成一行"
+                )
+                continue
+            item["bases"][b["base"]] = b
+
+    # 宽表收尾：按 (项目, 月份, PN, 供应商) 聚合，多行的基地合并成一条记录的 bases 快照
+    for key in wide_order:
+        item = wide_merged[key]
         rows.append((
-            {"share_current": share, "q_score": q, "d_score": d, "c_score": c,
-             "bases": bases_data if bases_data else None},
+            {"share_current": item["share"], "q_score": item["q"], "d_score": item["d"],
+             "c_score": item["c"], "bases": list(item["bases"].values()) or None},
             key,
         ))
 
-    if long_mode:
+    if long_mode_any:
         # ---- 长表收尾：口径归一 → 分段/分基地校验 → 聚合成份额记录 ----
         nonzero_bshare = [v for v in long_bshare_vals if v != 0]
         if nonzero_bshare:
@@ -1074,11 +1474,12 @@ async def import_share_records(
                     f"物料 {pn}: 同时出现在多个段（{' / '.join(sorted(s or '未填段' for s in segs))}），"
                     "一个物料只能属于一个段，请拆成不同物料 PN"
                 )
-        # 同一段内每个基地的供应商份额合计必须 = 100%（容差 ±1%，与「份额和」口径一致）
-        for (pn, seg, base), total in long_base_total.items():
+        # 同一段内每个基地的供应商份额合计必须 = 100%（按项目 × 月份分开算）
+        for (pid, mon, pn, seg, base), total in long_base_total.items():
             if abs(total - 100) > 1:
                 result.errors.append(
-                    f"物料 {pn} · {seg or '未分段'} · 基地「{base}」: 各供应商基地份额合计 {total:.1f}% ≠ 100%（容差 ±1%）"
+                    f"{label_of(pid, mon)} · 物料 {pn} · {seg or '未分段'} · 基地「{base}」: "
+                    f"各供应商基地份额合计 {total:.1f}% ≠ 100%（容差 ±1%）"
                 )
         # 聚合成一条份额记录：bases 仍是 [{base, share, lines}]，模型与前端零改动
         for key in long_order:
@@ -1104,35 +1505,54 @@ async def import_share_records(
                 "请统一口径（0-1 小数 或 0-100 百分数）"
             )
 
-    # 仅录基地数据（本月份额留空）→ 先按各基地 (share × lines) 公式自动算份额
-    for data, _ in rows:
-        if data["bases"] and data["share_current"] is None:
-            auto = _auto_share_from_bases(data["bases"])
-            if auto is not None:
-                data["share_current"] = auto
+    # 仅录基地数据（本月份额留空）→ 按各基地份额与基地拉线数自动算物料级份额。
+    # ★ 分母必须是「该（项目 × 月份 × 物料）**全部**基地的拉线数之和」，不是这家供应商自己 bases 的拉线数之和。
+    #   按记录自算会把只在部分基地供货的供应商高估：基地A 60%（2 线）、基地B 不供货 →
+    #   自算得 60，按物料 5 线算应为 24，于是「同物料份额和」凑不到 100%，整批 422 ——
+    #   这就是「一个项目多家基地、各基地供应商组合不同」时导不进去的原因。
+    # ★ base_lines 在扫块时已按（项目, 月份, 物料, 基地）收好，且同一基地只允许一个数 ——
+    #   这里不再从 rows 里重建，否则「同一基地被填了两个数」会被二次覆盖掉。
+    lines_total: dict[tuple[int, str, str], int] = defaultdict(int)
+    for (pid, mon, pn, _base), lines in base_lines.items():
+        lines_total[(pid, mon, pn)] += lines
 
-    # 同项目同物料份额和 ≈ 100% 校验
-    share_by_material: dict[str, float] = defaultdict(float)
+    for data, key in rows:
+        if data["share_current"] is not None or not data["bases"]:
+            continue
+        pid, mon, pn, _scode = key
+        denom = lines_total.get((pid, mon, pn), 0)
+        if denom <= 0:
+            continue
+        weighted = sum(b["share"] * base_lines[(pid, mon, pn, b["base"])] for b in data["bases"])
+        data["share_current"] = round(weighted / denom, 2)
+
+    # 同项目同月份同物料份额和 ≈ 100% 校验
+    share_by_material: dict[tuple[int, str, str], float] = defaultdict(float)
     for data, key in rows:
         if data["share_current"] is not None:
-            share_by_material[key[0]] += data["share_current"]
-    for pn, total in share_by_material.items():
-        if total is not None and abs(total - 100) > 1:
-            result.errors.append(f"物料 {pn}: 同项目同物料份额和 {total:.1f} ≠ 100%（容差 ±1%）")
+            pid, mon, pn, _scode = key
+            share_by_material[(pid, mon, pn)] += data["share_current"]
+    for (pid, mon, pn), total in share_by_material.items():
+        if abs(total - 100) > 1:
+            result.errors.append(
+                f"{label_of(pid, mon)} · 物料 {pn}: 同物料份额和 {total:.1f} ≠ 100%（容差 ±1%）"
+            )
 
     if result.errors:
-        # 有错误则不写入任何行（原子性）
+        # 有错误则不写入任何行（原子性）；此时自动建档的 flush 尚未 commit，随会话回滚
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="；".join(result.errors[:20]))
 
-    touched_materials: set[int] = set()
+    touched: set[tuple[int, str, int]] = set()  # (项目, 月份, 物料)
     for data, key in rows:
-        existing = existing_records.get(key)
+        pid, mon, pn, scode = key
+        existing = records_of(pid, mon).get((pn, scode))
+        c = counters[(pid, mon)]
         if existing is not None and existing.edited_manually:
-            result.skipped += 1
+            c["skipped"] += 1
             continue
-        rel = relation_map[key]
-        prev = prev_records.get(key)
-        touched_materials.add(rel.material_id)
+        rel = relation_map[(pn, scode)]
+        prev = records_of(pid, _prev_month(mon)).get((pn, scode))
+        touched.add((pid, mon, rel.material_id))
         if existing is not None:
             # 更新（不覆盖手改值；基地配额列有值时同步覆盖基地快照）
             existing.share_current = data["share_current"] if data["share_current"] is not None else existing.share_current
@@ -1141,12 +1561,12 @@ async def import_share_records(
             existing.c_score = data["c_score"] if data["c_score"] is not None else existing.c_score
             if data["bases"]:
                 existing.bases = json.dumps(data["bases"], ensure_ascii=False)
-            result.updated += 1
+            c["updated"] += 1
         else:
             record = ShareRecord(
-                project_id=project_id,
+                project_id=pid,
                 supply_relation_id=rel.id,
-                month=month,
+                month=mon,
                 share_current=data["share_current"],
                 share_prev=prev.share_current if prev else None,
                 quota_prev=prev.quota_suggested if prev else None,
@@ -1156,17 +1576,57 @@ async def import_share_records(
                 bases=json.dumps(data["bases"], ensure_ascii=False) if data["bases"] else None,
             )
             db.add(record)
-            result.imported += 1
+            c["imported"] += 1
 
     # 统一重算：新增的记录此刻还是 pending 对象，而 Session 是 autoflush=False，
     # 必须先 flush，_recompute_project_material 的 SELECT 才能看到它们；
     # 否则新增行不会写加权分 / 建议配额（表现为导入首月这些字段全 NULL，要再导一次才补算）。
-    if touched_materials:
+    if touched:
         db.flush()
-        for material_id in sorted(touched_materials):
-            _recompute_project_material(db, project_id, material_id, month)
+        for pid, mon, material_id in sorted(touched):
+            _recompute_project_material(db, pid, material_id, mon)
+
+    # 自动建档计数挂在 (pid, "") 上，最后按项目合并进各自的 (pid, 月份)
+    created_by_project: dict[int, dict[str, int]] = defaultdict(lambda: {"m": 0, "s": 0, "l": 0})
+    for (pid, mon), c in counters.items():
+        if mon == "":
+            created_by_project[pid]["m"] += c["created_materials"]
+            created_by_project[pid]["s"] += c["created_suppliers"]
+            created_by_project[pid]["l"] += c["created_links"]
 
     db.commit()
+
+    # 结果按（项目 × 月份）分组：一份文件跨项目时，弹窗要能说清哪条归谁
+    totals = {"imported": 0, "updated": 0, "skipped": 0, "m": 0, "s": 0, "l": 0}
+    for (pid, mon), c in sorted(counters.items()):
+        if mon == "":
+            continue
+        proj = project_by_id_map.get(pid)
+        result.by_project.append({
+            "project_id": pid,
+            "project_code": (proj.code if proj else "") or "",
+            "project_name": proj.name if proj else "",
+            "month": mon,
+            "imported": c["imported"],
+            "updated": c["updated"],
+            "skipped": c["skipped"],
+            "created_materials": created_by_project[pid]["m"],
+            "created_suppliers": created_by_project[pid]["s"],
+            "created_links": created_by_project[pid]["l"],
+        })
+        totals["imported"] += c["imported"]
+        totals["updated"] += c["updated"]
+        totals["skipped"] += c["skipped"]
+    totals["m"] = sum(v["m"] for v in created_by_project.values())
+    totals["s"] = sum(v["s"] for v in created_by_project.values())
+    totals["l"] = sum(v["l"] for v in created_by_project.values())
+
+    result.imported = totals["imported"]
+    result.updated = totals["updated"]
+    result.skipped = totals["skipped"]
+    result.created_materials = totals["m"]
+    result.created_suppliers = totals["s"]
+    result.created_links = totals["l"]
     return result
 
 

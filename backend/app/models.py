@@ -22,6 +22,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Computed,
     Date,
     DateTime,
     Float,
@@ -36,7 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .database import Base
+from .database import IS_MYSQL, Base
 
 
 class Product(Base):
@@ -50,8 +51,13 @@ class Product(Base):
     """
 
     __tablename__ = "products"
+    # 唯一性只对「未删除」记录生效：
+    #   SQLite → 部分唯一索引（sqlite_where）；
+    #   MySQL / OceanBase → 不支持条件索引，改用生成列 sku_active（删除行置 NULL）。
     __table_args__ = (
-        Index("uq_products_sku_active", "sku", unique=True, sqlite_where=text("is_deleted = 0")),
+        Index("uq_products_sku_active", "sku_active", unique=True)
+        if IS_MYSQL
+        else Index("uq_products_sku_active", "sku", unique=True, sqlite_where=text("is_deleted = 0")),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -63,6 +69,14 @@ class Product(Base):
     category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True, comment="产品分类")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", comment="状态: active/inactive/archived")
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True, comment="软删除标记")
+    if IS_MYSQL:
+        # 生成列：仅未删除行有值，配合 uq_products_sku_active 达到「部分唯一」的效果
+        sku_active: Mapped[str | None] = mapped_column(
+            String(64),
+            Computed("IF(is_deleted = 0, sku, NULL)", persisted=True),
+            nullable=True,
+            comment="生成列（MySQL 专用）：替代部分唯一索引",
+        )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -276,8 +290,11 @@ class ProjectDemandVersion(Base):
     __tablename__ = "project_demand_versions"
     __table_args__ = (
         UniqueConstraint("project_id", "seq", name="uq_demand_version_project_seq"),
-        # 部分唯一索引：同一项目至多一条「当前版」（与 uq_products_sku_active 同款写法）
-        Index("uq_demand_version_current", "project_id", unique=True, sqlite_where=text("is_current = 1")),
+        # 部分唯一索引：同一项目至多一条「当前版」
+        #   SQLite → 条件索引；MySQL / OceanBase → 生成列 current_project_id（非当前版为 NULL）
+        Index("uq_demand_version_current", "current_project_id", unique=True)
+        if IS_MYSQL
+        else Index("uq_demand_version_current", "project_id", unique=True, sqlite_where=text("is_current = 1")),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -289,6 +306,14 @@ class ProjectDemandVersion(Base):
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", comment="来源: manual/excel")
     effective_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="生效日期")
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="当前版标记（同项目至多一条为真）")
+    if IS_MYSQL:
+        # 生成列：只有当前版有值，其余为 NULL —— 唯一键于是只约束「当前版」这一行
+        current_project_id: Mapped[int | None] = mapped_column(
+            Integer,
+            Computed("IF(is_current = 1, project_id, NULL)", persisted=True),
+            nullable=True,
+            comment="生成列（MySQL 专用）：替代部分唯一索引",
+        )
     note: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
     created_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="录入人（无登录体系，纯文本留痕）")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)

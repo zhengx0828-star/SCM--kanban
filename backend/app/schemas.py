@@ -123,6 +123,22 @@ class SupplierMaterialBrief(BaseModel):
     category: Optional[str] = None
 
 
+class SupplierRiskReason(BaseModel):
+    """红黄绿判定依据（一条 = 一类命中原因，已聚合计数）。"""
+
+    code: str = Field(..., description="规则编号：card_red / stockout / shortage / card_yellow / change / sole_low_stock / manual_red")
+    label: str = Field(..., description="人话短标签，如「已断货」")
+    detail: str = Field(..., description="带数字的说明，如「2 个推算单元期末库存为 0」")
+
+
+class SupplierRiskRead(BaseModel):
+    """供应商级红黄绿（实时算，不落库）。level: red / yellow / green。"""
+
+    level: str = Field(..., description="red / yellow / green")
+    reasons: list[SupplierRiskReason] = Field(default_factory=list)
+    stats: dict[str, int] = Field(default_factory=dict, description="断货单元数 / 缺口物料数 / 进行中变更数等")
+
+
 class SupplierRead(SupplierBase):
     """供应商响应模型（含供应的物料，无项目信息）。"""
 
@@ -132,6 +148,7 @@ class SupplierRead(SupplierBase):
     created_at: datetime
     updated_at: datetime
     materials: list[SupplierMaterialBrief] = Field(default_factory=list)
+    risk: Optional[SupplierRiskRead] = Field(None, description="地图点位颜色来源（实时判定）")
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +494,20 @@ class ProjectBomUpdate(BaseModel):
     bom_factor: float = Field(..., ge=0, description="BOM 用量系数（1 台产品需多少个该物料）")
 
 
+class ProjectMaterialRemoveInput(BaseModel):
+    """从项目移除物料（一次可多个 PN）。"""
+
+    pns: list[str] = Field(..., min_length=1, description="要移除的物料 PN 列表")
+
+
+class ProjectMaterialRemoveResult(BaseModel):
+    """移除结果：删了几行明细、实际移除了哪几个物料。"""
+
+    removed_materials: int = Field(0, description="实际移除的物料数")
+    removed_links: int = Field(0, description="实际删除的供应明细行数（= 供应商数之和）")
+    pns: list[str] = Field(default_factory=list, description="实际移除的物料 PN")
+
+
 class ProjectSupplyRelationRead(BaseModel):
     """项目供应明细响应（四元组 + 项目字段）。"""
 
@@ -677,6 +708,21 @@ class ShareRecordList(BaseModel):
     total: int
 
 
+class ShareImportProjectItem(BaseModel):
+    """导入结果按（项目 × 月份）拆开的一份 —— 一份文件里可能跨项目、跨月份。"""
+
+    project_id: int
+    project_code: str = ""
+    project_name: str = ""
+    month: str
+    imported: int = 0
+    updated: int = 0
+    skipped: int = 0
+    created_materials: int = 0
+    created_suppliers: int = 0
+    created_links: int = 0
+
+
 class ShareImportResult(BaseModel):
     """Excel 导入结果。"""
 
@@ -684,6 +730,12 @@ class ShareImportResult(BaseModel):
     updated: int = 0
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)
+    # 文件里出现主档没有的 PN / 供应商代码时，按文件名称自动建档并挂到当前项目的数量
+    created_materials: int = 0
+    created_suppliers: int = 0
+    created_links: int = 0
+    # 按（项目 × 月份）拆开：跨项目导入时前端要能说清哪条归谁
+    by_project: list[ShareImportProjectItem] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

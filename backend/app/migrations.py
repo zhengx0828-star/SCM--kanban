@@ -227,7 +227,15 @@ def _migrate_demand_versions(conn, logs: list[str]) -> None:
 
 
 def run_migrations(engine: Engine) -> list[str]:
-    """执行全部迁移，返回执行记录（供启动日志打印）。幂等，可重复调用。"""
+    """执行全部迁移，返回执行记录（供启动日志打印）。幂等，可重复调用。
+
+    ★ 整段都是 SQLite 专用语法（PRAGMA / sqlite_master / 建表-拷贝-改名）。
+      MySQL / OceanBase 下直接返回空列表：结构由 create_all（或 docs/mysql/schema.sql）
+      一次建到位，不存在「历史库需要补列」的问题 —— 那些迁移是为已有 SQLite 库补的。
+    """
+    if engine.dialect.name != "sqlite":
+        return []
+
     logs: list[str] = []
     with engine.connect() as conn:
         # PRAGMA foreign_keys 是连接级设置，且**在事务内切换不生效**。
