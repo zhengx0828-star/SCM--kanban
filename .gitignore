@@ -23,6 +23,10 @@ vite.config.ts.timestamp-*.mjs
 .DS_Store
 Thumbs.db
 
+# 本地环境变量（可能含数据库口令，只留在本机）
+.env
+.env.local
+
 # AI 助手记忆/会话数据（不进版本库）
 .workbuddy/
 .codebuddy/
