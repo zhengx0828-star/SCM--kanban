@@ -26,6 +26,7 @@
    - ✅ 需要改数据库结构时，只允许走 `backend\app\migrations.py` 的**幂等增量迁移**（`ALTER TABLE ADD COLUMN` / 带数据拷贝的一次性重建），**严禁 `DROP TABLE`**；
    - ℹ️ **git 操作（`checkout` / `reset` / `pull` / `stash`）不会影响 `products.db`** —— 因为它未被跟踪。真正危险的是**文件级删除/覆盖**。
    - 判断口诀：**「我只是读代码、改代码、跑 git」= 安全；「我要删文件、覆盖目录、重新克隆」= 停手先问用户。**
+9. **★ 文案纪律：真正的危险操作或复杂业务规则才需要用文字兜底，其余的常规功能一律开组件本身的直觉设计表达，严禁废话说明。** 写任何说明书内容（规则页 SOP / 指标字典 / 团队补充 / 弹窗提示 / 空态文案）前先过一遍：这个操作靠按钮、图标、下拉框本身的直觉能不能看懂？能看懂就不写文字。只有「删了会出事」的危险操作、或「不说清就算错」的复杂业务规则，才值得文字兜底。禁止问句标题、禁止「点击上方按钮即可完成」这类复读、禁止排比口号。
 
 ---
 
@@ -63,6 +64,14 @@
 - **Excel 导入「一行错 → 整批不写」**（`POST /api/supplier-segments/import`）：返回 `errors` 逐行列出，`created/updated` 都是 0。批量补录最怕「错 1 行、进了 49 行」，事后没人对得出来少的是哪一行。档位兼容 `1/0.7`、`100/70`、`70%` 三种写法，但 **`0.8` 直接报错、不就近取整**。模板在 `frontend/public/templates/segment-import-template.xlsx`（`scripts/make_segment_template.py` 生成，改列记得两边一起改）。
 - 验证：`python scripts/verify_segments.py`（40 条纯函数断言，不碰库、不起服务）。
 
+### 供需管理 · 项目详情页（2026-11-03）
+
+- **物料圆点 = 供需状态，不是分类色**。`MultiSelectDropdown` 的 `dotColor` 由 `lib/supply-risk.ts` 的 `materialDotColor()` 给：任一月份产能 < 需求 → 红；全年每月都够 → 绿；**未设 BOM 或全年需求为 0 → 灰**（除不出系数，涂绿等于谎报「够用」，与列表里「未设 BOM」徽标同口径）。判定只走 `buildMaterialRisk`，别在渲染处另写阈值。
+- **需求源必须是「正在查看的版本」**（`viewedVersion.demand`），不能用 `relations[0].demand`（那只是当前版投影）。否则看历史版时图表按旧需求画、圆点按新需求算，同一个物料两个结论。
+- **管理物料 = 只摘项目挂载**：`POST /api/projects/{id}/materials/bulk-remove`（body `{pns:[...]}`）删该项目该 PN 下**全部**明细行（= 供应商数），一次事务提交；不动 `materials` / `supply_relations` / 份额 / 库存 / 变更（后三者都不挂项目）。删完可用「新增物料-供应商」挂回（按 PN 复用主数据），但产能与 BOM 要重录。要彻底删主数据走「供应商列表 → 物料」，那里有 409 引用保护（坑 30 那段 CASCADE 事故）。
+- 移除**不影响客户需求**：需求存在 `project_demand_versions`，明细行上的 `demand` 只是投影。
+- 验证：`python scripts/verify_remove_project_materials.py`（13 条断言，临时库不碰正式数据）。
+
 ### 预警中心（Dashboard 内，无独立页面）
 
 用户明确拍板：**不单独开 `/alerts` 页面，Dashboard 本身就是预警中心**。改这块前先读这一条，否则很容易做出第三套口径。
@@ -77,10 +86,25 @@
 - **`by_project` 必须包含无信号项目**（`severity=None`、计数 0），否则老板会问「另一个项目呢」。
 - **份额基准月不能取 `max(month)`**：月末结转生成的空档月（`share_current` 全 NULL）也是合法记录，取它会掉进空月、把当月风险整片遮住。必须 `WHERE share_current IS NOT NULL`。
 - **排序键：`severity` → `due_in_days` → `impact` → `fingerprint`**。`impact` 单位因 kind 而异（件/天/百分点/单元数），只在同 kind 内可比；跨来源唯一能比的是 `due_in_days`（距出事天数），所以它排在 impact 前面。来源固定序保留但只作同档同天数的兜底 —— 让它主导会把「已断货」排到「三个月后的缺口」后面。无事件日（份额 / 数据缺口）沉到同档末尾。`scripts/verify_alerts.py` 有排序断言。
-- **第 6 类来源还没接：供应商红黄绿**。地图点位按 `suppliers.risk_level` 着色（红/黄/绿，NULL=未评估），用户明确「那也是风险预警，只是还没设置规则」。规则定下来后加 `source="supplier"` 读 `risk_level`，**不要在别处另算一套判定**；同时要补矩阵列、`ALERT_SOURCE_LABEL`、`ALERT_TARGET_LABEL`。
+- **供应商红黄绿规则已定（2026-11-03），颜色读 `risk` 不读 `risk_level`**。判定在 `backend/app/supplier_risk.py`（实时算、不落库），`GET /api/suppliers` 与 `GET /api/projects/{id}/suppliers` 都下发 `risk: {level, reasons[], stats}`：
+  - 红 = **凡影响交付**：红牌或黄牌生效（「红黄牌都是红色」）/ 已断货（`INV_STATUS_STOCKOUT`）/ 库存跌破安全线（`INV_STATUS_RED`）/ 供需缺口（`shortage`）/ 人工标红
+  - 黄 = 不影响交付：**有进行中的变更**（2026-11-03 用户明确「有变更是黄色就好」，从红降黄）/ **唯一货源**（`is_sole` 且没有库存跌破/断货）
+  - 绿 = 其余，**含没有台账的**（用户明确「只要在地图上的就是绿的」，所以别自作聪明加灰）
+  - `suppliers.risk_level` 只剩一个作用：**人工加红**（自动未判红时补一条 `manual_red`），人工黄/绿不参与，不允许把红刷绿。
+  - 缺口与变更是「项目 × 物料」级，按物料推断到该项目该物料的全部供应商；变更单若填了 `supplier_id` 只算那一家（表单目前没这个字段）。
+  - 判定**不复制阈值**：库存四档 import `inventory._assemble`、缺口 import `alerts._supply_items`、牌 import `segments._active_card_today`、独供 import `share._load_all_records`。验收 `python scripts\verify_supplier_risk.py`（16 条断言，临时库不碰正式数据）。
+  - 第 6 类预警来源 `source="supplier"` **仍未接**：接的时候直接复用 `assess_supplier_risk`，别再写一套；同时补矩阵列、`ALERT_SOURCE_LABEL`、`ALERT_TARGET_LABEL`。
+- **地图风险可读性（2026-11-03）**：
+  - 悬浮省份 → tooltip 列该省全部供应商（颜色 + 判定依据），红家在前；悬浮点位 → 单点详情；聚合气泡（>8 家）→ 列 6 家 + 「另 N 家」。
+  - **坑：geo 区域的 tooltip 不走全局 `tooltip.formatter`**，必须挂在 `geo.tooltip.formatter` 上；全局 formatter 对 geo 返回任何值都不生效，ECharts 会回退成「只显示省名」。踏过这个坑，别再改回全局。
+  - **坑：tooltip formatter 是长生命周期闭包**（chart 只 init 一次），省份数据不能以数组形式传进 `buildOption`，否则永远用初始化时的空数组 —— 传 getter `() => groupsRef.current`。
+  - 有红/黄的省份省名常显：单独一个 `province-risk-label` scatter 系列（`symbolSize: 1` + 数据项级 `label.color`，`zlevel 6` 压在散点之上，白/深描边 `textBorderWidth: 3`）。
+  - 点击省份 → `geo.regions` 改底色（只 setOption `geo.regions`，不重建，roam/zoom 不丢）+ 右上角名单卡片；再点同省或点 × 取消。
+  - 截图验收要遮住图例区再找散点：图例里的红点是 canvas 画的，按颜色找点会先命中它。`scripts/shot-cdp.mjs` 不适合这种场景，用 CDP 网格法找散点簇（40px 网格、跳过 >30000 像素的不透明底图层）。
 - **首页只有计数与分布，没有任何清单或摘要条**（2026-10-20 用户连删两块：先删「预警明细」，再删「紧急」置顶条）。结构固定为三段：5 张卡 → 项目风险热点矩阵 → 供应商地图。
   - 约束：矩阵「紧急」列（该项目最严重那一条的标题）是首页**唯一**的具体信息；矩阵格是**唯一**的详情入口，点格必须带项目过滤直接进板块（`buildProjectDimLink`）。别再往首页加明细表或摘要条，也别把格子做成纯展示。
 - **首页只给老板看，不写执行者语气**：不要出现「去处理」「点击查看」这类命令/操作措辞。跳转用**板块名 + ↗**（「份额管理 ↗」），写成「去哪」而不是「去干什么」。明细行整行即链接，行尾是位置标签不是按钮。
+- **撤点位 ≠ 删供应商（2026-11-03 用户踩过）**：地图上的点不是独立记录，就是 `suppliers` 上的 `city/longitude/latitude`。用户说「取消地图选点」时，要的是**这个点别显示了**，不是删供应商 —— `SupplyRelation.supplier_id` 是 `ondelete=CASCADE` 且 `database.py` 开了 `PRAGMA foreign_keys=ON`，删 supplier 会把项目供应关系一起清掉。`SupplierDetailDialog` 因此只提供「撤掉地图点位」（`PATCH /api/suppliers/{id}` 传 `{longitude:null, latitude:null}`，城市保留），**不提供删除供应商**；删除入口只在「供应商列表」，那里文案明确标注关系一并移除。
 - 验证：`python scripts\verify_alerts.py`（拷库到临时目录造库存单元/变更单/缺 BOM，**不碰正式库**），期望 `PASS`。
 - 深链：SupplyDemandPage 支持 `?project=&pn=`（2026-10-20 新增）。该页清空物料用的 effect **不能写成「跳过第一次」** —— StrictMode 下会跑两次，第一次就消耗掉标记，第二次照样把 URL 带来的 `pn` 清空。改为记录上一次 scope 值比较。
 
@@ -851,8 +875,165 @@ const maxCapacity = Math.max(0, ...stackedCapacity);   // → 83,000 → yAxis.m
 6. 段首次导入自动建档 → 一定要给 `PATCH /api/materials/{id}` 这种纠偏入口，
    否则第一次填错就死锁（再导必撞「一个物料只能属于一个段」）。
 
-回归脚本：`scripts/verify_share_import.py`（临时库跑，长表聚合 / 基地合计 / 跨段 / 宽表兼容）。
+回归脚本：`scripts/verify_share_import.py`（临时库跑，长表聚合 / 基地合计 / 跨段 / 宽表兼容 / **堆叠块 + 自动建档** / 基地列缺一列）。
 模板生成：`scripts/make_share_template.py` → `frontend/public/templates/share-import-template.xlsx`。
+
+> **2026-11-03 补（用户拿 111.xlsx 第二次报「还是导不进去」时落地）**：长表解决的是「新文件怎么写」，
+> 但用户手上已有的堆叠宽表并没有因此能导 —— 那次真报错是 5 条「未找到供应关系」，其中一条
+> 是 `PN=物料PN, 供应商=供应商代码`（第二块表头被当数据行）。所以**宽表分支也必须按块解析表头**：
+> - 逐行扫，遇到表头行（同时出现 `物料PN/PN/物料` 与 `供应商代码/物料名称/本月份额` 之一）就重新
+>   解析一套列映射（PN / 代码 / 份额 / QDC / 基地列全换），数据行记住自己属于哪一块。
+>   **块间基地列可以完全不同**（块1 基地A/B、块2 基地C/D）；只按第一行表头读会把块2 的
+>   C份额 按块1 的 A份额 列号读走 —— 不报错，但在算错数，比报错更危险。
+> - 基地必须成对：某基地只有「份额」没有「拉线数」列 → 在**表头级**报「缺少『A拉线数』列」，
+>   不要等每行都报一遍「有份额无线数」（用户改的是表头，不是数据行）。
+> - **主数据缺失自动建档**：PN / 供应商代码不在主档 → 按文件里的名称建 `materials` / `suppliers`，
+>   建 `supply_relations` 并挂 `project_supply_relations`（与 `POST /projects/{id}/relations/quick-add`
+>   同语义：**只复用或新建，绝不改名**）。以前一行都导不进去的第一因就是「文件里的 PN 主档没有」，
+>   而份额页不给建档入口 → 死循环。
+> - 宽表同一 `(PN, 供应商)` 出现在两块里（块1 写基地A/B、块2 写基地C/D）要合并 bases，
+>   不能直接 append 两条 `ShareRecord`（唯一键撞 → 导入 500）。
+> - 返回体补 `created_materials / created_suppliers / created_links`，弹窗 toast 直接报「自动建档」数量，
+>   不写清楚用户会以为主数据被凭空污染。
+
+> **2026-11-03 再补（用户追问「同一个项目多家基地，基地不一样怎么导」时发现）**：一个项目里各基地的
+> 供应商组合常常不同（基地A 两家 60/40，基地B 只有一家 100%），这时「本月份额留空自动算」会算错 ——
+> `_auto_share_from_bases` 用**这条记录自己 bases 的拉线数**做分母，只在部分基地供货的供应商被高估：
+> 基地A 60%（2 线）、基地B 不供货 → 自算 60，而按物料 5 条线应为 24 → 「同物料份额和 124%」整批 422。
+> **导入的自动算必须用物料级分母**：先按 `(PN, 基地)` 汇总各基地拉线数（同一基地各供应商填的应相同，
+> 取最大值兜底），分母 = Σ 该物料全部基地拉线数，分子 = Σ(该供应商在被供基地的份额 × 该基地拉线数)，
+> 缺席基地按 0 计。这样各基地份额合计 = 100% 时，物料级份额天然合计 100%，不再误报。
+> `_auto_share_from_bases` 保留给「单条手动新增 / 手改」（没有全物料视图）并在 docstring 注明这点。
+> 回归 `scripts/verify_share_import.py` 第 8 组：XJ 74.44 / KDL 25.56（合计 100），26 条断言全过。
+
+> **2026-11-03 三补（用户强调「表头不同但同一项目」）**：「表头不同」有三种形态，此前只支持第一种：
+> ① 同一 sheet 里多块表头堆叠（块间基地列不同）—— 已支持；② **一个基地 / 一个物料一个 sheet**，
+> sheet 之间表头不同 —— 以前 `ws = wb.active` 只读第一个 sheet，**其余 sheet 整块静默丢弃**
+> （不报错、不导入，用户视角是「导了，但只剩一个基地」）；③ 同一块里列顺序被打乱。
+> 现在：遍历 `wb.worksheets` 全部 sheet；每个 sheet 内按「表头行」切块，表头前的标题行（如
+> 「2026-11 份额表」）自动跳过；所有块按同一个 `project_id + month` 入同一批。
+> 报错行号带 sheet 名（`Sheet1 第 3 行`），否则多 sheet 时定位不到。
+> **另一个坑**：`Q/D/C` 评分列原用子串匹配，列序一换（「C份额」排在「C」前面）评分为被「C份额」
+> 命中 → 该基地列又被 `known_idx` 排除 → 基地 C 整列丢失且不报错。现在**先认基地列、再在剩余列里
+> 找评分列**（先整格精确 `Q`，再缩写兜底），基地列同时进 `used` 集合。
+> 回归第 9 组：两个 sheet、表头完全不同、列序打乱、表头前带标题行 → 31 条断言全过。
+
+> **2026-11-03 四补（一份文件跨项目跨月份）**：问答暴露的边界——导入接口只有 `project_id + month`
+> 两个参数，整个文件都归它，**sheet 名不参与判断**。用户要的是「同一份 Excel 里既有 LFP3 又有 EP1、
+> 既有 11 月又有 12 月」。改成三级优先：**行内「项目代码」「月份」列 > sheet 名 > 接口参数**。
+> - sheet 名匹配用**库里的项目代码和项目名称**（最长优先），不做自由正则拆分：`LFP2026-11` 用正则拆
+>   会得到 `LFP`，而真实项目是 `LFP3`。实际库里 `projects.code` 常是 `ABC/BBC` 这种内部码、
+>   `projects.name` 才是 `LFP3/EP1`，**两套都要认**（代码优先，唯一）。
+> - 月份正则必须**两位优先** `(1[0-2]|0?[1-9])`：写成 `(0?[1-9]|1[0-2])` 时 `2026-11` 会被 `0?[1-9]`
+>   先命中 `1` → 静默变成 1 月（回归第 10 组抓到的）。
+> - 项目代号写错**直接 422**，绝不静默落到默认项目 —— 那等于把 A 项目的份额写进 B 项目。
+> - 行键从 `(PN, 供应商)` 扩成 `(项目, 月份, PN, 供应商)`；「同物料份额和 100%」「同段同基地 100%」
+>   的分组键同理；已录记录改为按 `(项目, 月份)` 惰性加载（`records_of`），不能只预载默认那一个。
+> - 返回体加 `by_project`，前端 toast 逐项目月列「新增 / 更新 / 跳过」，否则跨项目导入用户不知道数落哪了。
+> - 模板同步：`项目代码 | 月份 | …` 两列置前（可留空），说明页写清三级优先级。
+> 回归第 10~12 组（sheet 名跨项目跨月 / 行内两列 / 项目不存在报错）→ 40 条断言全过。
+
+> **2026-11-03 五补（用户纠正：「拉线数是生产基地的产线数，不是供应商的」）**：导入实现把拉线数当成了
+> **每行都要填的供应商字段**，且同一基地被填了两个不同的数时 `max()` 静默取大 —— 等于替用户改数。
+> 拉线数是**基地**属性：这个基地有几条产线，同一基地所有供应商共用同一个数。改法：
+> 1. 扫块时先按 `(项目, 月份, 物料, 基地)` 收集线数；同一基地出现两个不同值 → **422 并指出两处行号**
+>    （`Sheet1 第 3 行: 基地「A」的拉线数前后不一致（第 2 行 写 2，这里写 1）`）。
+> 2. 同一基地**只需任意一行填一次**，其余行留空自动沿用（`base_lines` 兜底）。以前要求"份额与拉线数成对"，等于逼用户每行重复填一遍。
+> 3. 加权分母仍是「该物料全部基地的线数之和」；缺席基地按 0 计。
+> 4. 手动新增 / 改 bases 也统一了：`_material_lines_by_base` 查同项目同物料其它记录的基地，`_share_from_base_lines`
+>    按物料级分母算 —— 以前用「自己 bases」当分母，只供部分基地的供应商会被算成 100%。
+>    前端 `ShareRecordCreateDialog` 本来就是按基地属性设计的（预填、同基地沿用），这次后端才对齐。
+> 模板与示例同步改成「同一基地只在第一家填线数」。回归第 13~14 组 → 47 条断言全过。
+
+> **2026-11-03 六补（用户最后拍板：模板按他现有的宽表来）**：前几轮为了让「段」随便加而把模板做成了
+> 长表（14 列竖排），但用户手上就是横排宽表（`物料PN | 物料名称 | 供应商名称 | 供应商代码 | 本月份额 | Q | D | C | A份额 | A条数 | …`），
+> 要下载的模板跟他的一致。结论：**模板做成横排宽表**，`scripts/make_share_template.py` 重写：
+> - 固定 8 列 + 每基地一对 `<基地>份额 / <基地>条数`，示例分两块表头（块1 基地A/B、块2 基地C/D），
+>   与 `111.xlsx` 同构；去掉了长表里的「项目代码 / 月份 / 段 / 基地 / 拉线数」五列。
+> - 「段」不写进模板：无段列时后端 `seg_name` 恒 None → 走 `_ensure_relation` 建档时 `segment=seg or None`，
+>   即物料主档没段就留空待补，不强行填；长表分支的跨段校验照旧（无段列自然不触发）。
+> - 说明页 12 条按宽表口径重写（多块表头 / 基地成对 / 条数是基地属性 / 基地份额每个基地内部合计 100%…）。
+> - 前端 `ShareImportDialog` 的文案与列序示意同步改成宽表（去「固定 12 列」「段」等长表说法）。
+> - 回归新增第 15 组：**直接导 `share-import-template.xlsx` 本身**（防改模板改坏），52 条断言全过；
+>   模板实测 4 条入库、123 侧板 KL 71.43 / XS 28.57、块2 基地 C/D。
+> - 注意：模板里的示例行（123 侧板、456 电芯）会随导入一起建档，说明第 12 条已提醒用户先删示例行。
+
+
+---
+
+### 坑 29：★ Docker 离线包：wheel 要按目标 Python 版本下，`start.sh` 存成 CRLF 必死
+
+容器里只有 Python（无 Node、无网），所以前端必须**提前** `vite build`，后端依赖必须带 manylinux wheel。
+
+1. 在 Windows 上下 `pip download` **不带** `--platform` / `--python-version`，下到的是
+   `win_amd64` wheel，进 Linux 容器一律 `not a supported wheel`。正确写法（每个版本一遍）：
+
+```bash
+python -m pip download -r requirements-deploy.txt -d wheels --only-binary=:all: \
+  --platform manylinux_2_17_x86_64 --python-version 3.13 --implementation cp --abi cp313
+```
+
+2. 版本只打**两套**：`wheels/cp313/`、`wheels/cp314/`，`start.sh` 用
+   `print('cp%d%d' % sys.version_info[:2])` 选目录，缺目录就报错退出并列出已有版本。
+   全打 5 套会让包从 22MB 涨到 40MB（`sqlalchemy` 4.2MB + `pydantic_core` 2.1MB 每版各一份），
+   纯 Python 部分只 2MB 不随版本增加。
+   `uvicorn[standard]` 的 `httptools` / `watchfiles` 没有 cp314 wheel → 用**纯 `uvicorn`**
+   （asyncio 事件循环，无 uvloop），两个版本都能装。
+
+3. **`start.sh` 必须是 LF**。Write 工具在 Windows 上写出来是 CRLF，容器里 `sh start.sh`
+   直接 `$'\r': command not found`。打完包用
+   `python -c "print(b'\r\n' in open('start.sh','rb').read())"` 复查，转码后再打 tar。
+
+4. Git Bash 的 `tar -cf C:/...` 会把 `C:` 当**远程主机**（`Cannot connect to C: resolve failed`）
+   → 输出路径用 POSIX 形式 `/c/Users/.../scm-kanban-docker.tar`，且必须先 `cd` 进包根再用
+   相对路径 `tar -cf out.tar $(ls -A)`（tar 根**不套目录**）。
+
+5. 数据库不要写死 `backend/products.db`：`start.sh` 把首启的 db 复制到 `data/`（可挂卷），
+   再 `export SCM_DB_PATH`，容器重建不丢数据。
+
+验证顺序：解包 → `sh -n start.sh` → 本机装同版本依赖起服务 → `curl /api/health` + 首页截图，
+再用 `pip install --dry-run --no-index --find-links wheels --python-version 每个版本` 确认依赖闭合。
+
+
+### 坑 30：★ 换 MySQL：`sqlite_where` 会在 MySQL 上**退化成全表唯一索引**
+
+模型里两个「部分唯一索引」写的是 `Index(..., unique=True, sqlite_where=text("..."))`。
+MySQL / OceanBase 没有条件索引，SQLAlchemy **不会报错**，而是把 `sqlite_where` 丢掉，
+生成一条**普通唯一索引**：
+
+- `uq_products_sku_active` → `UNIQUE(sku)`：软删除后 SKU 不能复用（本来就是为了能复用才用部分索引）；
+- `uq_demand_version_current` → `UNIQUE(project_id)`：**同一项目再也存不下第二个版本**，
+  一调产就 500 —— 而且建表阶段完全静默，只有用户改需求时才炸。
+
+正确做法（已在 `models.py` 落地，用 `IS_MYSQL` 分支）：
+
+```python
+# SQLite：条件索引；MySQL：生成列 + 唯一键
+Index("uq_demand_version_current", "current_project_id", unique=True) if IS_MYSQL
+else Index(..., "project_id", unique=True, sqlite_where=text("is_current = 1"))
+
+# 生成列（只在 MySQL 模式挂到模型上，SQLite 结构一个字节都不变）
+current_project_id = mapped_column(Integer, Computed("IF(is_current = 1, project_id, NULL)", persisted=True))
+```
+
+其余三处 MySQL 适配：`DEFAULT (now())` → `CURRENT_TIMESTAMP`（OB 不认表达式默认值）、
+`FLOAT` → `DOUBLE`、`migrations.py` 全是 `PRAGMA`/`sqlite_master` 语法 → 非 sqlite 方言直接返回空。
+
+建表语句**不要手写**：`scripts/gen_mysql_schema.py` 从 ORM 编译（MySQL 方言）再改写，
+输出 `docs/mysql/schema.sql`，用 `sqlglot.parse(sql, dialect="mysql")` 过一遍语法。
+打包时同步成 `sql/schema-mysql.sql`；连库初始化用 `backend/init_mysql.py`（纯 PyMySQL，容器不需要 mysql 客户端）。
+
+
+### 坑 31：★ 弹窗宽度只写 `max-w-2xl` 会被 `sm:max-w-sm` 盖掉；二次确认不要叠第二个弹窗
+
+`components/ui/dialog.tsx` 的基础类是 `w-full max-w-[calc(100%-2rem)] ... sm:max-w-sm`。
+传 `className="max-w-2xl"` 时，tailwind-merge 认为 `max-w-2xl` 和 `sm:max-w-sm` 是**不同组**，
+≥640px 屏幕上仍是 384px 宽 —— 表格/列表会被挤成一列，肉眼看像"弹窗没生效"。
+**宽度必须带同样的断点前缀**：`className="sm:max-w-2xl"`（`MaterialDetailDialog` 的 `sm:max-w-5xl` 同理）。
+
+同一个坑的兄弟问题：**别在 Dialog 里再叠一个 AlertDialog 做二次确认**。子弹窗的 overlay 在父 Dialog
+看来就是「点了外面」，父层 `onInteractOutside` 一触发，整个弹窗连同刚填的内容一起关掉。
+确认态做成弹窗内的第二段（`ManageMaterialsDialog` 的 `confirming` 就是这么做的），层级不变、焦点不丢。
 
 
 ---
